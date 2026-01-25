@@ -1,0 +1,5 @@
+{
+  "name": "Context8",
+  "description": "A faithful recreation of the Context8 frontend interface for LLM documentation management.",
+  "requestFramePermissions": []
+}
