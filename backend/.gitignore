@@ -1,0 +1,22 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+modal_secrets.json
+.DS_Store
+*.pyc
+*.pyo
+dist/
+build/
+.idea/
+.vscode/
+alembic/versions/__pycache__/
+app/__pycache__/
+agents.md
+
+# Test cache
+tests/__pycache__/
+tests/.pytest_cache/
+
+# Script cache
+scripts/__pycache__/
