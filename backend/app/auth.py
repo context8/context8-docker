@@ -453,6 +453,12 @@ async def setup_admin(
     email = (request.email or username).strip()
     password_hash = hash_password(request.password)
 
+    existing = await db.execute(
+        select(User).where(or_(User.username == username, User.email == email))
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="User already exists")
+
     user = User(
         id=uuid.uuid4(),
         username=username,
