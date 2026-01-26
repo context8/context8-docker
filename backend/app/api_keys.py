@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from fastapi import APIRouter, Depends, HTTPException
 from .database import get_session, Base
 from sqlalchemy import Column, String, DateTime, Boolean
-from .auth import get_user_sub
+from .auth import require_admin_user
 from .users import User
 from .models import Solution, SolutionVote
 from .es import delete_solution_es
@@ -52,27 +52,27 @@ async def _cleanup_solutions_for_key(db: AsyncSession, key_id: str) -> None:
 async def create_api_key(
     name: str,
     db: AsyncSession = Depends(get_session),
-    user_id: str = Depends(get_user_sub),
+    admin_user: User = Depends(require_admin_user),
 ):
     raw_key = secrets.token_urlsafe(32)
     hashed = hash_key(raw_key)
     key_id = secrets.token_hex(8)
-    record = ApiKey(id=key_id, user_id=user_id, name=name, key_hash=hashed)
+    record = ApiKey(id=key_id, user_id=str(admin_user.id), name=name, key_hash=hashed)
     db.add(record)
     await db.commit()
     return {"id": key_id, "apiKey": raw_key}
 
 
 @router.get("")
-async def list_api_keys(db: AsyncSession = Depends(get_session), user_id: str = Depends(get_user_sub)):
-    res = await db.execute(select(ApiKey).where(ApiKey.user_id == user_id, ApiKey.revoked == False))
+async def list_api_keys(db: AsyncSession = Depends(get_session), admin_user: User = Depends(require_admin_user)):
+    res = await db.execute(select(ApiKey).where(ApiKey.user_id == str(admin_user.id), ApiKey.revoked == False))
     items = res.scalars().all()
     return [{"id": i.id, "name": i.name, "createdAt": i.created_at} for i in items]
 
 
 @router.delete("/{key_id}")
-async def revoke_api_key(key_id: str, db: AsyncSession = Depends(get_session), user_id: str = Depends(get_user_sub)):
-    res = await db.execute(select(ApiKey).where(ApiKey.id == key_id, ApiKey.user_id == user_id))
+async def revoke_api_key(key_id: str, db: AsyncSession = Depends(get_session), admin_user: User = Depends(require_admin_user)):
+    res = await db.execute(select(ApiKey).where(ApiKey.id == key_id, ApiKey.user_id == str(admin_user.id)))
     item = res.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Not found")

@@ -39,13 +39,21 @@ async def search_vector(
     query_vec: list[float],
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     limit: int = 25,
     visibility: str | None = None,
 ):
     vec_literal = "[" + ",".join(f"{float(v):.6f}" for v in query_vec) + "]"
     params = {"vec": vec_literal, "limit": limit}
     access_filter = ""
-    if visibility == VISIBILITY_TEAM:
+    if allow_admin:
+        if visibility == VISIBILITY_TEAM:
+            access_filter = "AND solutions.visibility = 'team'"
+        elif visibility == VISIBILITY_PRIVATE:
+            access_filter = "AND solutions.visibility = 'private'"
+        else:
+            access_filter = ""
+    elif visibility == VISIBILITY_TEAM:
         if not allow_team:
             return []
         access_filter = "AND solutions.visibility = 'team'"

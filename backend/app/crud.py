@@ -1,6 +1,6 @@
 import uuid
 from typing import List
-from sqlalchemy import select, or_, and_, func, cast, Text, delete, update
+from sqlalchemy import select, or_, and_, func, cast, Text, delete, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from .models import Solution, SolutionVote
 from .schemas import SolutionCreate
@@ -50,8 +50,12 @@ async def get_solution(
     solution_id: str,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
 ) -> Solution | None:
-    access_conditions = _access_conditions(api_key_ids, allow_team)
+    if allow_admin:
+        res = await db.execute(select(Solution).where(Solution.id == solution_id))
+        return res.scalar_one_or_none()
+    access_conditions = _access_conditions(api_key_ids, allow_team, allow_admin)
     if not access_conditions:
         return None
     res = await db.execute(
@@ -60,8 +64,10 @@ async def get_solution(
     return res.scalar_one_or_none()
 
 
-def _access_conditions(api_key_ids: list[str], allow_team: bool) -> list:
-    conditions = []
+def _access_conditions(api_key_ids: list[str], allow_team: bool, allow_admin: bool) -> list:
+    if allow_admin:
+        return [text("1=1")]
+    conditions: list = []
     if api_key_ids:
         conditions.append(
             and_(
@@ -78,7 +84,14 @@ def _visibility_condition(
     visibility: str | None,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
 ):
+    if allow_admin:
+        if visibility == VISIBILITY_TEAM:
+            return Solution.visibility == VISIBILITY_TEAM
+        if visibility == VISIBILITY_PRIVATE:
+            return Solution.visibility == VISIBILITY_PRIVATE
+        return text("1=1")
     if visibility == VISIBILITY_TEAM:
         return Solution.visibility == VISIBILITY_TEAM if allow_team else None
     if visibility == VISIBILITY_PRIVATE:
@@ -88,7 +101,7 @@ def _visibility_condition(
             Solution.visibility == VISIBILITY_PRIVATE,
             Solution.api_key_id.in_(api_key_ids),
         )
-    access_conditions = _access_conditions(api_key_ids, allow_team)
+    access_conditions = _access_conditions(api_key_ids, allow_team, allow_admin)
     if not access_conditions:
         return None
     return or_(*access_conditions)
@@ -98,11 +111,12 @@ async def list_solutions(
     db: AsyncSession,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     limit: int = 25,
     offset: int = 0,
     visibility: str | None = None,
 ) -> tuple[int, List[Solution]]:
-    access_condition = _visibility_condition(visibility, api_key_ids, allow_team)
+    access_condition = _visibility_condition(visibility, api_key_ids, allow_team, allow_admin)
     if access_condition is None:
         return 0, []
     base = select(Solution).where(access_condition)
@@ -117,9 +131,10 @@ async def count_accessible_solutions(
     db: AsyncSession,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     visibility: str | None = None,
 ) -> int:
-    access_condition = _visibility_condition(visibility, api_key_ids, allow_team)
+    access_condition = _visibility_condition(visibility, api_key_ids, allow_team, allow_admin)
     if access_condition is None:
         return 0
     count_stmt = select(func.count()).select_from(
@@ -129,10 +144,13 @@ async def count_accessible_solutions(
     return res.scalar() or 0
 
 
-async def delete_solution(db: AsyncSession, solution_id: str, api_key_ids: list[str]) -> bool:
-    if not api_key_ids:
+async def delete_solution(db: AsyncSession, solution_id: str, api_key_ids: list[str], allow_admin: bool) -> bool:
+    if not api_key_ids and not allow_admin:
         return False
-    res = await db.execute(select(Solution).where(Solution.id == solution_id, Solution.api_key_id.in_(api_key_ids)))
+    if allow_admin:
+        res = await db.execute(select(Solution).where(Solution.id == solution_id))
+    else:
+        res = await db.execute(select(Solution).where(Solution.id == solution_id, Solution.api_key_id.in_(api_key_ids)))
     sol = res.scalar_one_or_none()
     if not sol:
         return False
@@ -147,18 +165,25 @@ async def bump_upvotes(
     solution_ids: list[str],
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
 ) -> int:
     if not solution_ids:
         return 0
-    access_conditions = _access_conditions(api_key_ids, allow_team)
-    if not access_conditions:
-        return 0
-
-    stmt = (
-        update(Solution)
-        .where(Solution.id.in_(solution_ids), or_(*access_conditions))
-        .values(upvotes=Solution.upvotes + 1)
-    )
+    if allow_admin:
+        stmt = (
+            update(Solution)
+            .where(Solution.id.in_(solution_ids))
+            .values(upvotes=Solution.upvotes + 1)
+        )
+    else:
+        access_conditions = _access_conditions(api_key_ids, allow_team, allow_admin)
+        if not access_conditions:
+            return 0
+        stmt = (
+            update(Solution)
+            .where(Solution.id.in_(solution_ids), or_(*access_conditions))
+            .values(upvotes=Solution.upvotes + 1)
+        )
     res = await db.execute(stmt)
     await db.commit()
     return res.rowcount or 0
@@ -169,12 +194,16 @@ async def update_solution_visibility(
     solution_id: str,
     api_key_ids: list[str],
     visibility: str,
+    allow_admin: bool,
 ) -> Solution | None:
-    if not api_key_ids:
+    if not api_key_ids and not allow_admin:
         return None
-    res = await db.execute(
-        select(Solution).where(Solution.id == solution_id, Solution.api_key_id.in_(api_key_ids))
-    )
+    if allow_admin:
+        res = await db.execute(select(Solution).where(Solution.id == solution_id))
+    else:
+        res = await db.execute(
+            select(Solution).where(Solution.id == solution_id, Solution.api_key_id.in_(api_key_ids))
+        )
     sol = res.scalar_one_or_none()
     if not sol:
         return None
@@ -188,12 +217,13 @@ async def search_solutions(
     query: str,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     limit: int = 25,
     offset: int = 0,
     visibility: str | None = None,
 ) -> tuple[int, List[Solution]]:
     pattern = f"%{query}%"
-    access_condition = _visibility_condition(visibility, api_key_ids, allow_team)
+    access_condition = _visibility_condition(visibility, api_key_ids, allow_team, allow_admin)
     if access_condition is None:
         return 0, []
     base = select(Solution).where(

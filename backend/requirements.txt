@@ -12,3 +12,4 @@ email-validator==2.2.0
 alembic==1.17.2
 redis==5.0.8
 rq==1.16.2
+passlib[bcrypt]==1.7.4

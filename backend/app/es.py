@@ -24,8 +24,16 @@ def _auth() -> Optional[tuple[str, str]]:
 def _build_access_filter(
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     visibility: Optional[str] = None,
 ) -> dict:
+    if allow_admin:
+        if visibility == VISIBILITY_TEAM:
+            return {"term": {"visibility": VISIBILITY_TEAM}}
+        if visibility == VISIBILITY_PRIVATE:
+            return {"term": {"visibility": VISIBILITY_PRIVATE}}
+        return {"match_all": {}}
+
     if visibility == VISIBILITY_TEAM:
         return {"term": {"visibility": VISIBILITY_TEAM}}
     if visibility == VISIBILITY_PRIVATE:
@@ -70,6 +78,7 @@ async def search_solutions_es(
     query: str,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     limit: int,
     offset: int,
     vector: Optional[list[float]] = None,
@@ -78,7 +87,7 @@ async def search_solutions_es(
     if not ES_URL:
         return None
 
-    access_filter = _build_access_filter(api_key_ids, allow_team, visibility)
+    access_filter = _build_access_filter(api_key_ids, allow_team, allow_admin, visibility)
     query_body: dict[str, Any]
     if ES_BM25_WEIGHT > 0:
         query_body = {
@@ -144,12 +153,13 @@ async def fetch_solution_es(
     solution_id: str,
     api_key_ids: list[str],
     allow_team: bool,
+    allow_admin: bool,
     visibility: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     if not ES_URL:
         return None
 
-    access_filter = _build_access_filter(api_key_ids, allow_team, visibility)
+    access_filter = _build_access_filter(api_key_ids, allow_team, allow_admin, visibility)
     body: dict[str, Any] = {
         "size": 1,
         "_source": [

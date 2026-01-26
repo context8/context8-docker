@@ -1,4 +1,3 @@
-import os
 import secrets
 import hashlib
 import httpx
@@ -9,6 +8,7 @@ from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
 from pydantic import BaseModel, EmailStr
+from passlib.context import CryptContext
 from .database import get_session
 from .models import VerificationCode, AuthAuditLog
 from .users import User
@@ -26,6 +26,8 @@ RATE_LIMIT_IP_SECONDS = 60
 JWT_ISSUER = "context8.com"
 JWT_AUDIENCE = "context8-api"
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 # Pydantic models
 class SendCodeRequest(BaseModel):
@@ -39,13 +41,26 @@ class VerifyCodeRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: str
+    username: str | None = None
     email: str
     emailVerified: bool
+    isAdmin: bool = False
 
 
 class SessionResponse(BaseModel):
     token: str
     user: UserResponse
+
+
+class AdminSetupRequest(BaseModel):
+    username: str
+    password: str
+    email: str | None = None
+
+
+class LoginRequest(BaseModel):
+    identifier: str
+    password: str
 
 
 # Helper functions
@@ -64,7 +79,7 @@ def generate_salt() -> str:
     return secrets.token_hex(16)
 
 
-def sign_session_token(user_id: str | uuid.UUID, email: str) -> str:
+def sign_session_token(user_id: str | uuid.UUID, email: str, is_admin: bool = False) -> str:
     """Sign a JWT session token with 7-day expiry."""
     exp = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRY_DAYS)
     sub = str(user_id)
@@ -74,8 +89,20 @@ def sign_session_token(user_id: str | uuid.UUID, email: str) -> str:
         "exp": exp,
         "iss": JWT_ISSUER,
         "aud": JWT_AUDIENCE,
+        "is_admin": bool(is_admin),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        return pwd_context.verify(password, password_hash)
+    except Exception:
+        return False
 
 
 async def send_verification_email(email: str, code: str):
@@ -371,13 +398,110 @@ async def _issue_session(
         if updated:
             await db.commit()
 
-    session_token = sign_session_token(user.id, user.email)
+    session_token = sign_session_token(user.id, user.email, bool(user.is_admin))
     return SessionResponse(
         token=session_token,
         user=UserResponse(
             id=str(user.id),
+            username=user.username,
             email=user.email,
             emailVerified=user.email_verified,
+            isAdmin=bool(user.is_admin),
+        ),
+    )
+
+
+async def ensure_user(
+    db: AsyncSession,
+    user_id: str,
+) -> User:
+    try:
+        user_uuid = uuid.UUID(str(user_id))
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+    result = await db.execute(select(User).where(User.id == user_uuid))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    if EMAIL_VERIFICATION_ENABLED and not user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please verify your email to access this resource.",
+        )
+    return user
+
+
+async def admin_exists(db: AsyncSession) -> bool:
+    result = await db.execute(select(func.count()).select_from(User).where(User.is_admin == True))
+    return (result.scalar() or 0) > 0
+
+
+async def setup_admin(
+    request: AdminSetupRequest,
+    db: AsyncSession,
+) -> SessionResponse:
+    if await admin_exists(db):
+        raise HTTPException(status_code=409, detail="Admin already exists")
+
+    username = request.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+    if len(request.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    email = (request.email or username).strip()
+    password_hash = hash_password(request.password)
+
+    user = User(
+        id=uuid.uuid4(),
+        username=username,
+        email=email,
+        password=password_hash,
+        email_verified=True,
+        is_admin=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    session_token = sign_session_token(user.id, user.email, True)
+    return SessionResponse(
+        token=session_token,
+        user=UserResponse(
+            id=str(user.id),
+            username=user.username,
+            email=user.email,
+            emailVerified=user.email_verified,
+            isAdmin=True,
+        ),
+    )
+
+
+async def login(
+    request: LoginRequest,
+    db: AsyncSession,
+) -> SessionResponse:
+    identifier = request.identifier.strip()
+    if not identifier:
+        raise HTTPException(status_code=400, detail="Identifier is required")
+
+    result = await db.execute(
+        select(User).where(or_(User.username == identifier, User.email == identifier))
+    )
+    user = result.scalar_one_or_none()
+    if not user or not user.password or not verify_password(request.password, user.password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    session_token = sign_session_token(user.id, user.email, bool(user.is_admin))
+    return SessionResponse(
+        token=session_token,
+        user=UserResponse(
+            id=str(user.id),
+            username=user.username,
+            email=user.email,
+            emailVerified=user.email_verified,
+            isAdmin=bool(user.is_admin),
         ),
     )
 
@@ -410,6 +534,7 @@ def get_current_user(payload=Depends(verify_session_token)):
     """Get current user from JWT token."""
     user_id = payload.get("sub")
     email = payload.get("email")
+    is_admin = payload.get("is_admin")
 
     if not user_id or not email:
         raise HTTPException(
@@ -417,7 +542,7 @@ def get_current_user(payload=Depends(verify_session_token)):
             detail="Invalid token payload",
         )
 
-    return {"id": user_id, "email": email}
+    return {"id": user_id, "email": email, "is_admin": bool(is_admin)}
 
 
 def get_user_sub(payload=Depends(verify_session_token)) -> str:
@@ -436,3 +561,16 @@ def get_user_sub(payload=Depends(verify_session_token)) -> str:
             detail="Invalid token payload",
         )
     return user_id
+
+
+async def require_admin_user(
+    payload=Depends(verify_session_token),
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    user = await ensure_user(db, user_id)
+    if not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return user

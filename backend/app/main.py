@@ -54,12 +54,16 @@ from .visibility import VISIBILITY_PRIVATE, normalize_visibility
 from .auth import (
     send_code,
     verify_code,
-    verify_session_token,
-    get_current_user,
     SendCodeRequest,
     VerifyCodeRequest,
     SessionResponse,
-    UserResponse
+    UserResponse,
+    AdminSetupRequest,
+    LoginRequest,
+    ensure_user,
+    admin_exists,
+    setup_admin,
+    login,
 )
 from fastapi import APIRouter, Request
 
@@ -151,11 +155,12 @@ async def _bump_search_upvotes(
   result_ids: list[str],
   api_key_ids: list[str],
   allow_team: bool,
+  allow_admin: bool,
 ) -> None:
   if not result_ids:
     return
   try:
-    await bump_upvotes(db, result_ids, api_key_ids, allow_team)
+    await bump_upvotes(db, result_ids, api_key_ids, allow_team, allow_admin)
   except Exception as exc:
     print(f"search upvote bump failed: {exc}")
     return
@@ -195,6 +200,7 @@ async def _search_es(
   query: str,
   api_key_ids: list[str],
   allow_team: bool,
+  allow_admin: bool,
   limit: int,
   offset: int,
   vector: list[float] | None,
@@ -202,7 +208,7 @@ async def _search_es(
 ):
   try:
     return await asyncio.wait_for(
-      search_solutions_es(query, api_key_ids, allow_team, limit, offset, vector, visibility),
+      search_solutions_es(query, api_key_ids, allow_team, allow_admin, limit, offset, vector, visibility),
       timeout=SEARCH_ES_TIMEOUT,
     )
   except asyncio.TimeoutError:
@@ -215,15 +221,16 @@ async def _search_for_user(
   db: AsyncSession,
   api_key_ids: list[str],
   allow_team: bool,
+  allow_admin: bool,
   query: str,
   limit: int,
   visibility: str | None = None,
 ) -> SearchResponse:
   if limit <= 0:
-    total, _ = await search_solutions(db, query, api_key_ids, allow_team, 0, 0, visibility)
+    total, _ = await search_solutions(db, query, api_key_ids, allow_team, allow_admin, 0, 0, visibility)
     return SearchResponse(total=total, results=[])
 
-  accessible_total = await count_accessible_solutions(db, api_key_ids, allow_team, visibility)
+  accessible_total = await count_accessible_solutions(db, api_key_ids, allow_team, allow_admin, visibility)
   if accessible_total == 0:
     return SearchResponse(total=0, results=[])
 
@@ -232,7 +239,7 @@ async def _search_for_user(
   if knn_enabled:
     vector = await _embed_query(query)
 
-  es_resp = await _search_es(query, api_key_ids, allow_team, limit, 0, vector if knn_enabled else None, visibility)
+  es_resp = await _search_es(query, api_key_ids, allow_team, allow_admin, limit, 0, vector if knn_enabled else None, visibility)
   if es_resp:
     hits = es_resp.get("hits", {}).get("hits", [])
     results = []
@@ -265,6 +272,7 @@ async def _search_for_user(
         [item.id for item in results],
         api_key_ids,
         allow_team,
+        allow_admin,
       )
       if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
         print(f"search:es_hit results={len(results)}")
@@ -274,7 +282,7 @@ async def _search_for_user(
     if vector is None:
       vector = await _embed_query(query)
     if vector:
-      vector_hits = await search_vector(db, vector, api_key_ids, allow_team, limit, visibility)
+      vector_hits = await search_vector(db, vector, api_key_ids, allow_team, allow_admin, limit, visibility)
       if vector_hits:
         results = [
           SearchResult(
@@ -300,12 +308,13 @@ async def _search_for_user(
           [item.id for item in results],
           api_key_ids,
           allow_team,
+          allow_admin,
         )
         return SearchResponse(total=len(results), results=results)
   except Exception as e:
     print(f"vector search failed, falling back: {e}")
 
-  total, items = await search_solutions(db, query, api_key_ids, allow_team, limit, 0, visibility)
+  total, items = await search_solutions(db, query, api_key_ids, allow_team, allow_admin, limit, 0, visibility)
   results = [
     SearchResult(
       id=i.id,
@@ -330,6 +339,7 @@ async def _search_for_user(
     [item.id for item in results],
     api_key_ids,
     allow_team,
+    allow_admin,
   )
   return SearchResponse(total=total, results=results)
 
@@ -341,24 +351,6 @@ def _split_api_keys(x_api_key: str | None, x_api_keys: str | None) -> list[str]:
   if x_api_keys:
     raw_keys.extend([item.strip() for item in x_api_keys.split(",") if item.strip()])
   return raw_keys
-
-
-async def _ensure_verified_user(db: AsyncSession, user_id: str) -> User:
-  try:
-    user_uuid = uuid.UUID(str(user_id))
-  except Exception:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-  result = await db.execute(select(User).where(User.id == user_uuid))
-  user = result.scalar_one_or_none()
-  if not user:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-  if EMAIL_VERIFICATION_ENABLED and not user.email_verified:
-    raise HTTPException(
-      status_code=status.HTTP_403_FORBIDDEN,
-      detail="Email not verified. Please verify your email to access this resource.",
-    )
-  return user
 
 
 async def require_verified_user(
@@ -399,7 +391,7 @@ async def require_verified_user(
     print(f"[auth] unauthorized headers auth={authorization} x-api-key-present={bool(x_api_key)}")
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-  await _ensure_verified_user(db, user_id)
+  await ensure_user(db, user_id)
   return user_id
 
 
@@ -412,7 +404,10 @@ async def require_solution_read_scope(
   raw_keys = _split_api_keys(x_api_key, x_api_keys)
   api_key_ids: list[str] = []
   allow_team = False
+  allow_admin = False
   user_id = None
+  jwt_user_id: str | None = None
+  key_user_id: str | None = None
 
   if authorization and authorization.startswith("Bearer "):
     token = authorization.split(" ", 1)[1]
@@ -424,7 +419,7 @@ async def require_solution_read_scope(
         audience="context8-api",
         issuer="context8.com",
       )
-      user_id = data.get("sub")
+      jwt_user_id = data.get("sub")
     except Exception:
       raw_keys.append(token)
 
@@ -433,12 +428,17 @@ async def require_solution_read_scope(
     if not key_items:
       print("[auth] api key not resolved")
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    user_id = str(key_items[0].user_id)
+    key_user_id = str(key_items[0].user_id)
     api_key_ids = [item.id for item in key_items]
 
+  if jwt_user_id and key_user_id and jwt_user_id != key_user_id:
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key does not belong to user")
+
+  user_id = jwt_user_id or key_user_id
   if user_id:
-    await _ensure_verified_user(db, user_id)
+    user = await ensure_user(db, user_id)
     allow_team = True
+    allow_admin = bool(user.is_admin) and bool(jwt_user_id)
     if not api_key_ids:
       key_items = await list_active_api_keys(db, user_id)
       api_key_ids = [item.id for item in key_items]
@@ -446,7 +446,12 @@ async def require_solution_read_scope(
   if not user_id and not raw_keys:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-  return {"user_id": user_id, "api_key_ids": api_key_ids, "allow_team": allow_team}
+  return {
+    "user_id": user_id,
+    "api_key_ids": api_key_ids,
+    "allow_team": allow_team,
+    "allow_admin": allow_admin,
+  }
 
 
 async def require_solution_write_scope(
@@ -456,6 +461,7 @@ async def require_solution_write_scope(
   db: AsyncSession = Depends(get_session),
 ) -> dict:
   raw_keys = _split_api_keys(x_api_key, x_api_keys)
+  jwt_user_id: str | None = None
   if len(raw_keys) > 1:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multiple API keys not allowed for write")
 
@@ -464,8 +470,13 @@ async def require_solution_write_scope(
     if not key_items:
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     key_item = key_items[0]
-    await _ensure_verified_user(db, str(key_item.user_id))
-    return {"user_id": str(key_item.user_id), "api_key": key_item, "api_key_ids": [key_item.id]}
+    user = await ensure_user(db, str(key_item.user_id))
+    return {
+      "user_id": str(key_item.user_id),
+      "api_key": key_item,
+      "api_key_ids": [key_item.id],
+      "allow_admin": False,
+    }
 
   if authorization and authorization.startswith("Bearer "):
     token = authorization.split(" ", 1)[1]
@@ -477,26 +488,56 @@ async def require_solution_write_scope(
         audience="context8-api",
         issuer="context8.com",
       )
-      user_id = data.get("sub")
+      jwt_user_id = data.get("sub")
     except Exception:
       key_items = await resolve_api_keys(db, [token])
       if key_items:
         key_item = key_items[0]
-        await _ensure_verified_user(db, str(key_item.user_id))
-        return {"user_id": str(key_item.user_id), "api_key": key_item}
+        user = await ensure_user(db, str(key_item.user_id))
+        return {
+          "user_id": str(key_item.user_id),
+          "api_key": key_item,
+          "allow_admin": False,
+        }
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    await _ensure_verified_user(db, str(user_id))
-    key_items = await list_active_api_keys(db, str(user_id))
+    user = await ensure_user(db, str(jwt_user_id))
+    key_items = await list_active_api_keys(db, str(jwt_user_id))
     if not key_items:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key required for write")
     return {
-      "user_id": str(user_id),
+      "user_id": str(jwt_user_id),
       "api_key": key_items[0],
       "api_key_ids": [item.id for item in key_items],
+      "allow_admin": bool(user.is_admin),
     }
 
   raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+
+# Create auth router for admin setup/login
+auth_router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@auth_router.get("/status")
+async def auth_status(db: AsyncSession = Depends(get_session)):
+  return {"adminExists": await admin_exists(db)}
+
+
+@auth_router.post("/setup", response_model=SessionResponse)
+async def setup_admin_account(
+  payload: AdminSetupRequest,
+  db: AsyncSession = Depends(get_session),
+):
+  return await setup_admin(payload, db)
+
+
+@auth_router.post("/login", response_model=SessionResponse)
+async def login_account(
+  payload: LoginRequest,
+  db: AsyncSession = Depends(get_session),
+):
+  return await login(payload, db)
 
 
 # Create new auth router for email verification
@@ -542,6 +583,7 @@ async def get_current_user_info(
     )
 
 app.include_router(apikey_router)
+app.include_router(auth_router)
 app.include_router(email_auth_router)
 
 
@@ -701,6 +743,7 @@ async def list_user_solutions(
     db,
     scope["api_key_ids"],
     scope["allow_team"],
+    scope.get("allow_admin", False),
     limit,
     offset,
     visibility_filter,
@@ -739,6 +782,7 @@ async def count_user_solutions(
     db,
     scope["api_key_ids"],
     scope["allow_team"],
+    scope.get("allow_admin", False),
     visibility_filter,
   )
   return CountResponse(total=total)
@@ -750,7 +794,13 @@ async def fetch_solution(
   db: AsyncSession = Depends(get_session),
   scope: dict = Depends(require_solution_read_scope),
 ):
-  sol = await get_solution(db, solution_id, scope["api_key_ids"], scope["allow_team"])
+  sol = await get_solution(
+    db,
+    solution_id,
+    scope["api_key_ids"],
+    scope["allow_team"],
+    scope.get("allow_admin", False),
+  )
   if not sol:
     raise HTTPException(status_code=404, detail="Not found")
   my_vote = None
@@ -792,7 +842,12 @@ async def fetch_solution_es_detail(
   solution_id: str,
   scope: dict = Depends(require_solution_read_scope),
 ):
-  source = await fetch_solution_es(solution_id, scope["api_key_ids"], scope["allow_team"])
+  source = await fetch_solution_es(
+    solution_id,
+    scope["api_key_ids"],
+    scope["allow_team"],
+    scope.get("allow_admin", False),
+  )
   if not source:
     raise HTTPException(status_code=404, detail="Not found")
   return SolutionOut(
@@ -833,7 +888,13 @@ async def vote_solution(
   if not scope.get("user_id"):
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-  sol = await get_solution(db, solution_id, scope["api_key_ids"], scope["allow_team"])
+  sol = await get_solution(
+    db,
+    solution_id,
+    scope["api_key_ids"],
+    scope["allow_team"],
+    scope.get("allow_admin", False),
+  )
   if not sol:
     raise HTTPException(status_code=404, detail="Not found")
 
@@ -867,7 +928,13 @@ async def clear_vote_solution(
   if not scope.get("user_id"):
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-  sol = await get_solution(db, solution_id, scope["api_key_ids"], scope["allow_team"])
+  sol = await get_solution(
+    db,
+    solution_id,
+    scope["api_key_ids"],
+    scope["allow_team"],
+    scope.get("allow_admin", False),
+  )
   if not sol:
     raise HTTPException(status_code=404, detail="Not found")
 
@@ -896,7 +963,7 @@ async def delete_user_solution(
 ):
   api_key_ids = scope.get("api_key_ids", [])
   start = time.perf_counter()
-  deleted = await delete_solution(db, solution_id, api_key_ids)
+  deleted = await delete_solution(db, solution_id, api_key_ids, scope.get("allow_admin", False))
   db_ms = (time.perf_counter() - start) * 1000
   if not deleted:
     raise HTTPException(status_code=404, detail="Not found")
@@ -923,7 +990,13 @@ async def set_solution_visibility(
     visibility = normalize_visibility(payload.visibility) or VISIBILITY_PRIVATE
   except ValueError as exc:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-  sol = await update_solution_visibility(db, solution_id, api_key_ids, visibility)
+  sol = await update_solution_visibility(
+    db,
+    solution_id,
+    api_key_ids,
+    visibility,
+    scope.get("allow_admin", False),
+  )
   if not sol:
     raise HTTPException(status_code=404, detail="Not found")
   try:
@@ -950,6 +1023,7 @@ async def search(
       payload.query,
       scope["api_key_ids"],
       scope["allow_team"],
+      scope.get("allow_admin", False),
       0,
       payload.offset,
       visibility_filter,
@@ -964,6 +1038,7 @@ async def search(
     db,
     scope["api_key_ids"],
     scope["allow_team"],
+    scope.get("allow_admin", False),
     visibility_filter,
   )
   count_ms = (time.perf_counter() - count_start) * 1000
@@ -987,6 +1062,7 @@ async def search(
     payload.query,
     scope["api_key_ids"],
     scope["allow_team"],
+    scope.get("allow_admin", False),
     payload.limit,
     payload.offset,
     vector if knn_enabled else None,
@@ -1025,6 +1101,7 @@ async def search(
         [item.id for item in results],
         scope["api_key_ids"],
         scope["allow_team"],
+        scope.get("allow_admin", False),
       )
       if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
         print(f"search:es_hit results={len(results)}")
@@ -1049,6 +1126,7 @@ async def search(
         vector,
         scope["api_key_ids"],
         scope["allow_team"],
+        scope.get("allow_admin", False),
         payload.limit,
         visibility_filter,
       )
@@ -1078,6 +1156,7 @@ async def search(
           [item.id for item in results],
           scope["api_key_ids"],
           scope["allow_team"],
+          scope.get("allow_admin", False),
         )
         if _timing_enabled():
           total_ms = (time.perf_counter() - start) * 1000
@@ -1096,6 +1175,7 @@ async def search(
     payload.query,
     scope["api_key_ids"],
     scope["allow_team"],
+    scope.get("allow_admin", False),
     payload.limit,
     payload.offset,
     visibility_filter,
@@ -1125,6 +1205,7 @@ async def search(
     [item.id for item in results],
     scope["api_key_ids"],
     scope["allow_team"],
+    scope.get("allow_admin", False),
   )
   if _timing_enabled():
     total_ms = (time.perf_counter() - start) * 1000
@@ -1200,6 +1281,7 @@ async def llm_chat(
         db,
         scope["api_key_ids"],
         scope["allow_team"],
+        scope.get("allow_admin", False),
         query,
         limit,
       )
@@ -1253,6 +1335,7 @@ async def llm_chat(
       db,
       scope["api_key_ids"],
       scope["allow_team"],
+      scope.get("allow_admin", False),
       payload.prompt,
       payload.limit,
     )

@@ -11,4 +11,5 @@ class User(Base):
     email = Column(CITEXT, unique=True, index=True, nullable=False)
     password = Column(String, nullable=False, server_default="")
     email_verified = Column(Boolean, nullable=False, server_default='false')
+    is_admin = Column(Boolean, nullable=False, server_default='false')
     created_at = Column(DateTime, default=datetime.utcnow)
