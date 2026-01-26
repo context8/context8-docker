@@ -1,6 +1,6 @@
 # Context8 Docker (Private + Team)
 
-全套内网部署：前端 + 后端 + Embedding + ES + Postgres + Redis。默认关闭邮件验证，只有私有和团队可见性。
+全套内网部署：前端 + 后端 + Embedding + ES + Postgres + Redis。首次访问需设置管理员账号与密码，默认关闭邮件验证，只有私有和团队可见性。
 
 ## Quick Start
 
@@ -12,6 +12,10 @@ docker compose up -d --build
 访问：
 - 前端：`http://<host>:3000`
 - 后端：`http://<host>:8000/docs`
+
+首次登录：
+- 打开前端登录页，按提示创建管理员账号与密码。
+- 管理员登录后创建 API Key 分发给团队。
 
 ## 可见性规则
 - `private`: 仅当前 API Key/用户可见
@@ -34,7 +38,7 @@ docker compose up -d --build
 - `API_KEY_SECRET`
 - `VITE_API_BASE`（前端访问后端的地址）
 
-如果要启用邮件验证码：
+如需启用邮件验证码（不推荐内网场景）：
 ```
 EMAIL_VERIFICATION_ENABLED=true
 RESEND_API_KEY=...

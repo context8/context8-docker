@@ -1,6 +1,6 @@
 # Context8 API (FastAPI + Postgres)
 
-内网部署版本：默认关闭邮件验证，支持 API Key 与 Bearer JWT。可见性为 private/team（无 public）。
+内网部署版本：首次启动需创建管理员账号，支持 API Key 与 Bearer JWT。可见性为 private/team（无 public）。
 
 ## 环境变量
 - `DATABASE_URL`：Postgres 连接（本地示例：`postgresql+asyncpg://user:pass@host:5432/context8`）。
@@ -26,16 +26,25 @@ alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## 注册与登录（默认无邮件验证）
-1. 直接登录（发送验证码接口会直接返回 token）：
+## 管理员初始化与登录
+1. 检查是否已有管理员：
    ```bash
-   curl -X POST http://localhost:8000/auth/email/send-code \
-     -H "Content-Type: application/json" \
-     -d '{"email":"you@example.com"}'
+   curl http://localhost:8000/auth/status
    ```
-   返回字段 `token` 与 `user.id`。
+2. 初始化管理员（仅首次）：
+   ```bash
+   curl -X POST http://localhost:8000/auth/setup \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"changeme123"}'
+   ```
+3. 登录：
+   ```bash
+   curl -X POST http://localhost:8000/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"identifier":"admin","password":"changeme123"}'
+   ```
 
-## 创建 API Key（可选）
+## 创建 API Key（管理员）
 ```bash
 curl -X POST http://localhost:8000/apikeys \
   -H "Authorization: Bearer <token>" \
