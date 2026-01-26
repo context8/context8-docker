@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 };
 
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<View>('dashboard');
+  const [currentView, setCurrentView] = useState<View>('login');
   const [session, setSession] = useState<Session | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeMode>('light');
@@ -32,6 +32,7 @@ const App: React.FC = () => {
     const storedTheme = localStorage.getItem(STORAGE_KEYS.theme) as ThemeMode | null;
     if (token && email) {
       setSession({ token, email });
+      setCurrentView('dashboard');
     }
     if (storedKey) {
       setApiKey(storedKey);
@@ -59,7 +60,7 @@ const App: React.FC = () => {
     localStorage.removeItem(STORAGE_KEYS.apiKey);
     setSession(null);
     setApiKey(null);
-    setCurrentView('home');
+    setCurrentView('login');
   };
 
   const handleLoginSuccess = (token: string, user: { id: string; email: string }) => {

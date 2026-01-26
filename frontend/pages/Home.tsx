@@ -17,7 +17,7 @@ export const Home: React.FC<Props> = ({ onViewChange, theme }) => {
           Context8 Internal Knowledge Base
         </h1>
         <p className={`text-lg max-w-2xl ${isDark ? 'text-slate-400' : 'text-gray-500'}`}>
-          Private + team-only error solutions for your deployment. No public access.
+          Private + team-only error solutions for your deployment. No public access. First visit sets the admin account.
         </p>
       </div>
 
