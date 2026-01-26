@@ -1,6 +1,6 @@
 import uuid
 from typing import List
-from sqlalchemy import select, or_, and_, func, cast, Text, delete, update, text
+from sqlalchemy import select, or_, and_, func, cast, Text, delete, update, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from .models import Solution, SolutionVote
 from .schemas import SolutionCreate
@@ -66,7 +66,7 @@ async def get_solution(
 
 def _access_conditions(api_key_ids: list[str], allow_team: bool, allow_admin: bool) -> list:
     if allow_admin:
-        return [text("1=1")]
+        return [true()]
     conditions: list = []
     if api_key_ids:
         conditions.append(
@@ -91,7 +91,7 @@ def _visibility_condition(
             return Solution.visibility == VISIBILITY_TEAM
         if visibility == VISIBILITY_PRIVATE:
             return Solution.visibility == VISIBILITY_PRIVATE
-        return text("1=1")
+        return true()
     if visibility == VISIBILITY_TEAM:
         return Solution.visibility == VISIBILITY_TEAM if allow_team else None
     if visibility == VISIBILITY_PRIVATE:
