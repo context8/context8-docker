@@ -30,6 +30,21 @@ def upgrade() -> None:
 
     for col in inspector.get_columns("users"):
         if col["name"] == "id" and not isinstance(col["type"], postgresql.UUID):
+            invalid = bind.execute(
+                sa.text(
+                    """
+                    SELECT id FROM users
+                    WHERE id IS NULL
+                       OR id = ''
+                       OR id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                    LIMIT 1
+                    """
+                )
+            ).fetchone()
+            if invalid:
+                raise RuntimeError(
+                    "users.id contains non-UUID values; clean them before migration"
+                )
             op.execute("ALTER TABLE users ALTER COLUMN id TYPE uuid USING id::uuid")
             break
 
