@@ -23,9 +23,16 @@ if raw_url.strip().startswith("psql"):
             raw_url = url_match.group(0)
             print("[DB] Extracted PostgreSQL URL from command string")
 
-def _normalize_url(url_str: str) -> URL:
+def _normalize_url(url_str: str) -> tuple[URL, bool]:
     url = make_url(url_str)
     query = dict(url.query)
+    ssl_disabled = False
+
+    sslmode = query.get("sslmode") or query.get("ssl")
+    if sslmode is not None:
+        ssl_value = str(sslmode).lower()
+        if ssl_value in ("disable", "false", "0", "no"):
+            ssl_disabled = True
 
     # asyncpg does not accept sslmode/channel_binding as query params
     # Remove them completely - we'll handle SSL via connect_args
@@ -50,26 +57,46 @@ def _normalize_url(url_str: str) -> URL:
         print(f"[DB] Removed incompatible params: {', '.join(removed_params)}")
     print(f"[DB] Normalized URL - driver: {normalized.drivername}, host: {normalized.host}")
 
-    return normalized
+    return normalized, ssl_disabled
 
-DATABASE_URL = _normalize_url(raw_url)
+DATABASE_URL, SSL_DISABLED_IN_URL = _normalize_url(raw_url)
 USE_NULL_POOL = os.environ.get("DATABASE_NULL_POOL", "").lower() in ("1", "true", "yes")
 if not USE_NULL_POOL and DATABASE_URL.host and "pooler" in DATABASE_URL.host:
     USE_NULL_POOL = True
     print("[DB] Detected pooler host; using NullPool to avoid stale connections")
 
+def _parse_ssl_env(value: str | None) -> bool | None:
+    if not value:
+        return None
+    normalized = value.lower()
+    if normalized in ("1", "true", "yes", "require", "verify", "verify-full"):
+        return True
+    if normalized in ("0", "false", "no", "disable"):
+        return False
+    return None
+
+
+ssl_env = _parse_ssl_env(os.environ.get("DATABASE_SSL") or os.environ.get("DB_SSL"))
+ssl_enabled = ssl_env if ssl_env is not None else not SSL_DISABLED_IN_URL
+
 # For asyncpg, SSL must be passed via connect_args, not as URL parameter
 # Use ssl=True for secure connections when required by cloud providers
 # Add connection pool settings for managed database connections
+connect_args = {
+    "server_settings": {
+        "application_name": "context8_api"
+    }
+}
+if ssl_enabled:
+    connect_args["ssl"] = True
+    print("[DB] SSL enabled via connect_args")
+else:
+    print("[DB] SSL disabled via connect_args")
+
 engine_kwargs = {
     "future": True,
     "echo": False,
-    "connect_args": {
-        "ssl": True,
-        "server_settings": {
-            "application_name": "context8_api"
-        }
-    },
+    "connect_args": connect_args,
 }
 
 if USE_NULL_POOL:
@@ -85,7 +112,6 @@ else:
     )
 
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
-print("[DB] Engine created with SSL enabled via connect_args")
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 Base = declarative_base()
 

@@ -34,6 +34,7 @@ docker compose up -d --build
 ## 配置说明
 `.env` 里至少配置：
 - `POSTGRES_PASSWORD`
+- `DATABASE_SSL`（本地 Postgres 建议 `false`；接云端 PG 可设 `true` 或在 `DATABASE_URL` 里加 `sslmode=require`）
 - `JWT_SECRET`
 - `API_KEY_SECRET`
 - `VITE_API_BASE`（前端访问后端的地址）
@@ -44,6 +45,8 @@ EMAIL_VERIFICATION_ENABLED=true
 RESEND_API_KEY=...
 RESEND_FROM=...
 ```
+
+如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
 
 ## 常用命令
 

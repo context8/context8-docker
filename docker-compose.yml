@@ -3,7 +3,7 @@ version: "3.9"
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: context8-postgres
+    container_name: ${CONTEXT8_POSTGRES_NAME:-context8-postgres}
     environment:
       POSTGRES_DB: context8
       POSTGRES_USER: context8
@@ -23,7 +23,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: context8-redis
+    container_name: ${CONTEXT8_REDIS_NAME:-context8-redis}
     ports:
       - "${REDIS_PORT:-6379}:6379"
     networks:
@@ -31,7 +31,7 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
-    container_name: context8-es
+    container_name: ${CONTEXT8_ES_NAME:-context8-es}
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -52,7 +52,7 @@ services:
   embedding:
     build:
       context: ./embedding
-    container_name: context8-embedding
+    container_name: ${CONTEXT8_EMBEDDING_NAME:-context8-embedding}
     environment:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       PORT: 8001
@@ -64,7 +64,7 @@ services:
   api:
     build:
       context: ./backend
-    container_name: context8-api
+    container_name: ${CONTEXT8_API_NAME:-context8-api}
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +78,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ES_URL: ${ES_URL:-http://elasticsearch:9200}
       ES_INDEX: ${ES_INDEX:-solutions}
@@ -101,7 +102,7 @@ services:
   worker-embedding:
     build:
       context: ./backend
-    container_name: context8-worker-embedding
+    container_name: ${CONTEXT8_WORKER_EMBEDDING_NAME:-context8-worker-embedding}
     depends_on:
       redis:
         condition: service_started
@@ -113,6 +114,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       EMBED_QUEUE_NAME: ${EMBED_QUEUE_NAME:-embedding}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
@@ -126,7 +128,7 @@ services:
   worker-es:
     build:
       context: ./backend
-    container_name: context8-worker-es
+    container_name: ${CONTEXT8_WORKER_ES_NAME:-context8-worker-es}
     depends_on:
       redis:
         condition: service_started
@@ -138,6 +140,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ES_QUEUE_NAME: ${ES_QUEUE_NAME:-es_sync}
       ES_URL: ${ES_URL:-http://elasticsearch:9200}
@@ -152,7 +155,7 @@ services:
   cleanup:
     build:
       context: ./backend
-    container_name: context8-cleanup
+    container_name: ${CONTEXT8_CLEANUP_NAME:-context8-cleanup}
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,6 +163,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
     command: python local_cleanup.py --schedule --interval 6
     restart: unless-stopped
@@ -171,7 +175,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
-    container_name: context8-frontend
+    container_name: ${CONTEXT8_FRONTEND_NAME:-context8-frontend}
     depends_on:
       api:
         condition: service_started
