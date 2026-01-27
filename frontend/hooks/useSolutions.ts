@@ -9,12 +9,23 @@ export interface PaginationState {
   total: number;
 }
 
+export interface SolutionCounts {
+  total: number;
+  team: number;
+  private: number;
+}
+
 export function useSolutions(auth: AuthOptions) {
   const [solutions, setSolutions] = useState<Solution[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [counts, setCounts] = useState<SolutionCounts>({
+    total: 0,
+    team: 0,
+    private: 0,
+  });
   const [pagination, setPagination] = useState<PaginationState>({
     page: 1,
     pageSize: 25,
@@ -23,10 +34,33 @@ export function useSolutions(auth: AuthOptions) {
   const searchAbortRef = useRef<AbortController | null>(null);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const fetchCounts = useCallback(async () => {
+    if (!auth.token && !auth.apiKey && (!auth.apiKeys || auth.apiKeys.length === 0)) {
+      setCounts({ total: 0, team: 0, private: 0 });
+      return;
+    }
+
+    try {
+      const [totalResp, teamResp, privateResp] = await Promise.all([
+        solutionsService.count(auth),
+        solutionsService.count(auth, 'team'),
+        solutionsService.count(auth, 'private'),
+      ]);
+      setCounts({
+        total: totalResp.total,
+        team: teamResp.total,
+        private: privateResp.total,
+      });
+    } catch (err) {
+      console.warn('Failed to fetch solution counts', err);
+    }
+  }, [auth.token, auth.apiKey, auth.apiKeys?.join(',')]);
+
   const fetchSolutions = useCallback(async (page = 1, pageSize = 25) => {
     if (!auth.token && !auth.apiKey && (!auth.apiKeys || auth.apiKeys.length === 0)) {
       setSolutions([]);
       setPagination((prev) => ({ ...prev, total: 0 }));
+      setCounts({ total: 0, team: 0, private: 0 });
       return;
     }
 
@@ -41,13 +75,14 @@ export function useSolutions(auth: AuthOptions) {
         pageSize,
         total: data.total,
       });
+      await fetchCounts();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch solutions');
       setSolutions([]);
     } finally {
       setIsLoading(false);
     }
-  }, [auth.token, auth.apiKey, auth.apiKeys?.join(',')]);
+  }, [auth.token, auth.apiKey, auth.apiKeys?.join(','), fetchCounts]);
 
   const setPage = useCallback((page: number) => {
     setPagination((prev) => ({ ...prev, page }));
@@ -227,6 +262,7 @@ export function useSolutions(auth: AuthOptions) {
     isLoading,
     isSearching,
     error,
+    counts,
     pagination,
     setPage,
     setPageSize,

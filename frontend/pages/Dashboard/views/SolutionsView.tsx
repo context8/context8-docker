@@ -48,6 +48,7 @@ export const SolutionsView: React.FC<SolutionsViewProps> = ({
     searchResults,
     isLoading,
     isSearching,
+    counts,
     pagination,
     setPage,
     setPageSize,
@@ -87,11 +88,12 @@ export const SolutionsView: React.FC<SolutionsViewProps> = ({
 
   // Count stats
   const stats = useMemo(() => {
-    const total = pagination.total;
-    const teamCount = solutions.filter(s => s.visibility === 'team').length;
-    const privateCount = solutions.filter(s => s.visibility === 'private').length;
-    return { total, teamCount, privateCount };
-  }, [solutions, pagination.total]);
+    return {
+      total: counts.total,
+      teamCount: counts.team,
+      privateCount: counts.private,
+    };
+  }, [counts]);
 
   // Filter and sort solutions
   const displaySolutions = useMemo(() => {
