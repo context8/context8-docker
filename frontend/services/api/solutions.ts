@@ -18,10 +18,45 @@ export interface VisibilityUpdateResponse {
   visibility: Visibility;
 }
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ListOptions {
+  limit?: number;
+  offset?: number;
+  visibility?: Visibility;
+}
+
 export const solutionsService = {
-  async list(auth: AuthOptions, visibility?: Visibility): Promise<Solution[]> {
-    const query = visibility ? `?visibility=${encodeURIComponent(visibility)}` : '';
-    return request<Solution[]>(`/solutions${query}`, { method: 'GET' }, auth);
+  async list(auth: AuthOptions, options: ListOptions = {}): Promise<PaginatedResponse<Solution>> {
+    const { limit = 25, offset = 0, visibility } = options;
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    if (visibility) {
+      params.set('visibility', visibility);
+    }
+    const data = await request<PaginatedResponse<Solution> | Solution[]>(
+      `/solutions?${params.toString()}`,
+      { method: 'GET' },
+      auth
+    );
+
+    if (Array.isArray(data)) {
+      return {
+        items: data,
+        total: data.length,
+        limit,
+        offset,
+      };
+    }
+
+    return data;
   },
 
   async get(auth: AuthOptions, id: string): Promise<Solution> {

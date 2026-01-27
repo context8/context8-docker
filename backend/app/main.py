@@ -17,6 +17,7 @@ from .schemas import (
   SolutionCreate,
   SolutionOut,
   SolutionListItem,
+  PaginatedSolutions,
   SearchRequest,
   SearchResponse,
   SearchResult,
@@ -727,7 +728,7 @@ async def save_solution(
   )
 
 
-@app.get("/solutions", response_model=List[SolutionListItem])
+@app.get("/solutions", response_model=PaginatedSolutions)
 async def list_user_solutions(
   limit: int = 25,
   offset: int = 0,
@@ -748,24 +749,29 @@ async def list_user_solutions(
     offset,
     visibility_filter,
   )
-  return [
-    SolutionListItem(
-      id=i.id,
-      title=i.title,
-      errorMessage=i.error_message,
-      errorType=i.error_type,
-      tags=i.tags,
-      conversationLanguage=i.conversation_language,
-      programmingLanguage=i.programming_language,
-      vibecodingSoftware=i.vibecoding_software,
-      visibility=i.visibility,
-      upvotes=i.upvotes,
-      downvotes=i.downvotes,
-      voteScore=(i.upvotes or 0) - (i.downvotes or 0),
-      createdAt=i.created_at,
-    )
-    for i in items
-  ]
+  return PaginatedSolutions(
+    items=[
+      SolutionListItem(
+        id=i.id,
+        title=i.title,
+        errorMessage=i.error_message,
+        errorType=i.error_type,
+        tags=i.tags,
+        conversationLanguage=i.conversation_language,
+        programmingLanguage=i.programming_language,
+        vibecodingSoftware=i.vibecoding_software,
+        visibility=i.visibility,
+        upvotes=i.upvotes,
+        downvotes=i.downvotes,
+        voteScore=(i.upvotes or 0) - (i.downvotes or 0),
+        createdAt=i.created_at,
+      )
+      for i in items
+    ],
+    total=total,
+    limit=limit,
+    offset=offset,
+  )
 
 
 @app.get("/solutions/count", response_model=CountResponse)

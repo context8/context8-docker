@@ -67,6 +67,16 @@ class SolutionListItem(BaseModel):
         populate_by_name = True
 
 
+class PaginatedSolutions(BaseModel):
+    items: List[SolutionListItem]
+    total: int
+    limit: int
+    offset: int
+
+    class Config:
+        populate_by_name = True
+
+
 class SolutionVisibilityUpdate(BaseModel):
     visibility: Visibility
 

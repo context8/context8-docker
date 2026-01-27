@@ -11,6 +11,7 @@ import { Dropdown } from '@/components/Common/Dropdown';
 import { ErrorTypeBadge, getErrorTypeOptions, normalizeErrorType } from '@/components/Common/ErrorTypeBadge';
 import { TagCloud } from '@/components/Common/TagCloud';
 import { MarkdownRenderer } from '@/components/Common/MarkdownRenderer';
+import { Pagination } from '@/components/Common/Pagination';
 import { useSolutions } from '@/hooks/useSolutions';
 import { useToast } from '@/hooks/useToast';
 import { ToastContainer } from '@/components/Common/Toast';
@@ -47,6 +48,9 @@ export const SolutionsView: React.FC<SolutionsViewProps> = ({
     searchResults,
     isLoading,
     isSearching,
+    pagination,
+    setPage,
+    setPageSize,
     createSolution,
     deleteSolution,
     setVisibility,
@@ -83,11 +87,11 @@ export const SolutionsView: React.FC<SolutionsViewProps> = ({
 
   // Count stats
   const stats = useMemo(() => {
-    const total = solutions.length;
+    const total = pagination.total;
     const teamCount = solutions.filter(s => s.visibility === 'team').length;
     const privateCount = solutions.filter(s => s.visibility === 'private').length;
     return { total, teamCount, privateCount };
-  }, [solutions]);
+  }, [solutions, pagination.total]);
 
   // Filter and sort solutions
   const displaySolutions = useMemo(() => {
@@ -471,6 +475,17 @@ export const SolutionsView: React.FC<SolutionsViewProps> = ({
         <div className={`text-center text-sm ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
           Found {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for "{debouncedQuery}"
         </div>
+      )}
+
+      {!searchResults && pagination.total > 0 && (
+        <Pagination
+          page={pagination.page}
+          pageSize={pagination.pageSize}
+          total={pagination.total}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          theme={theme}
+        />
       )}
 
       {/* Create Modal */}
