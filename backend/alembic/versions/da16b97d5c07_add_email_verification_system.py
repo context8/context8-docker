@@ -32,6 +32,10 @@ def _has_column(inspector, table: str, column: str) -> bool:
     return any(col["name"] == column for col in inspector.get_columns(table))
 
 
+def _has_index(inspector, table: str, index_name: str) -> bool:
+    return any(idx.get("name") == index_name for idx in inspector.get_indexes(table))
+
+
 def upgrade() -> None:
     """Create baseline schema if missing; safe to run on a fresh database."""
     bind = op.get_bind()
@@ -94,9 +98,12 @@ def upgrade() -> None:
             sa.Column("environment", JSON(), nullable=True),
             sa.Column("embedding", Vector(EMBEDDING_DIM), nullable=True),
         )
-        op.create_index("ix_solutions_user_id", "solutions", ["user_id"])
-        op.create_index("ix_solutions_api_key_id", "solutions", ["api_key_id"])
-        op.create_index("ix_solutions_created_at", "solutions", ["created_at"])
+        if not _has_index(inspector, "solutions", "ix_solutions_user_id"):
+            op.create_index("ix_solutions_user_id", "solutions", ["user_id"])
+        if not _has_index(inspector, "solutions", "ix_solutions_api_key_id"):
+            op.create_index("ix_solutions_api_key_id", "solutions", ["api_key_id"])
+        if not _has_index(inspector, "solutions", "ix_solutions_created_at"):
+            op.create_index("ix_solutions_created_at", "solutions", ["created_at"])
     else:
         if not _has_column(inspector, "solutions", "api_key_id"):
             op.add_column("solutions", sa.Column("api_key_id", sa.String(), nullable=True))
