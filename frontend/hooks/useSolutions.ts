@@ -50,13 +50,12 @@ export function useSolutions(auth: AuthOptions) {
   }, [auth.token, auth.apiKey, auth.apiKeys?.join(',')]);
 
   const setPage = useCallback((page: number) => {
-    setPagination((prev) => {
-      fetchSolutions(page, prev.pageSize);
-      return prev;
-    });
-  }, [fetchSolutions]);
+    setPagination((prev) => ({ ...prev, page }));
+    fetchSolutions(page, pagination.pageSize);
+  }, [fetchSolutions, pagination.pageSize]);
 
   const setPageSize = useCallback((pageSize: number) => {
+    setPagination((prev) => ({ ...prev, page: 1, pageSize }));
     fetchSolutions(1, pageSize);
   }, [fetchSolutions]);
 
@@ -74,7 +73,7 @@ export function useSolutions(auth: AuthOptions) {
     } finally {
       setIsLoading(false);
     }
-  }, [auth, scheduleRefresh]);
+  }, [auth, fetchSolutions, pagination.page, pagination.pageSize]);
 
   const scheduleRefresh = useCallback(() => {
     if (refreshTimeoutRef.current) {
@@ -100,7 +99,7 @@ export function useSolutions(auth: AuthOptions) {
     } finally {
       setIsLoading(false);
     }
-  }, [auth, fetchSolutions, pagination.page, pagination.pageSize]);
+  }, [auth, scheduleRefresh]);
 
   const setVisibility = useCallback(async (id: string, visibility: Visibility) => {
     setIsLoading(true);
@@ -115,7 +114,7 @@ export function useSolutions(auth: AuthOptions) {
     } finally {
       setIsLoading(false);
     }
-  }, [auth, fetchSolutions]);
+  }, [auth, fetchSolutions, pagination.page, pagination.pageSize]);
 
   const getSolution = useCallback(async (id: string) => {
     return solutionsService.getEs(auth, id);
