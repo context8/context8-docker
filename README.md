@@ -46,7 +46,7 @@ RESEND_API_KEY=...
 RESEND_FROM=...
 ```
 
-如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
+如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。`worker-embedding` 为支持横向扩容未固定 `container_name`。
 
 ## 常用命令
 

@@ -102,7 +102,6 @@ services:
   worker-embedding:
     build:
       context: ./backend
-    container_name: ${CONTEXT8_WORKER_EMBEDDING_NAME:-context8-worker-embedding}
     depends_on:
       redis:
         condition: service_started
