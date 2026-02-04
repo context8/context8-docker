@@ -1,7 +1,7 @@
 """Add daily/monthly limits to api_keys.
 
 Revision ID: f2c7b9d0a4e1
-Revises: e4a1c9b7d901
+Revises: 8c4b1a9d2f7e
 Create Date: 2026-02-04 00:00:00
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "f2c7b9d0a4e1"
-down_revision = "e4a1c9b7d901"
+down_revision = "8c4b1a9d2f7e"
 branch_labels = None
 depends_on = None
 
