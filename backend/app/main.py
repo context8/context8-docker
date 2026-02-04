@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from .database import get_session
+from .models import Solution
 from .schemas import (
   SolutionCreate,
   SolutionOut,
