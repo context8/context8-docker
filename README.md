@@ -1,6 +1,6 @@
 # Context8 Docker (Private + Team)
 
-全套内网部署：前端 + 后端 + Embedding + ES + Postgres + Redis。首次访问需设置管理员账号与密码，默认关闭邮件验证，只有私有和团队可见性。
+全套内网部署：前端 + 后端 + ES + Postgres（可选 Embedding）。首次访问需设置管理员账号与密码，默认关闭邮件验证，只有私有和团队可见性。
 
 ## Quick Start
 
@@ -23,13 +23,14 @@ docker compose up -d --build
 
 ## 主要服务
 - `frontend`: Vite + Nginx 静态站点
-- `api`: FastAPI + Postgres + Redis
-- `worker-embedding`: 向量生成任务
-- `worker-es`: ES 同步任务
-- `embedding`: sentence-transformers 模型服务
+- `api`: FastAPI + Postgres（写入时同步更新 ES；搜索只走 ES）
+- `embedding`: sentence-transformers 模型服务（可选；仅在启用 ES kNN 时使用）
 - `elasticsearch`: 搜索索引
 - `postgres`: 业务数据库（pgvector）
-- `redis`: 队列
+
+## 检索规则（重要）
+- `/search` **只走 Elasticsearch**（无 DB/pgvector 回退）。ES 不可用时会直接报错。
+- `ES_KNN_WEIGHT>0` 时启用向量检索（需要 `embedding` 服务可用且 ES 索引已写入 embedding 字段）；否则只用 BM25。
 
 ## 配置说明
 `.env` 里至少配置：
@@ -46,7 +47,7 @@ RESEND_API_KEY=...
 RESEND_FROM=...
 ```
 
-如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。`worker-embedding` 为支持横向扩容未固定 `container_name`。
+如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
 
 ## 常用命令
 

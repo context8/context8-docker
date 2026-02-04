@@ -1,14 +1,6 @@
 version: '3.8'
 
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: context8-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    networks:
-      - context8-network
-
   postgres:
     image: pgvector/pgvector:pg16
     container_name: context8-postgres
@@ -40,7 +32,6 @@ services:
     env_file:
       - .env
     environment:
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
     command: >
       /bin/sh -c "python local_server.py --host 0.0.0.0 --port 8000 --workers 4"
@@ -56,52 +47,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  worker-embedding:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: context8-worker-embedding
-    depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      EMBED_QUEUE_NAME: ${EMBED_QUEUE_NAME:-embedding}
-    command: >
-      /bin/sh -c "rq worker --url ${REDIS_URL:-redis://redis:6379/0} ${EMBED_QUEUE_NAME:-embedding}"
-    restart: unless-stopped
-    networks:
-      - context8-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-  worker-es:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: context8-worker-es
-    depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      ES_QUEUE_NAME: ${ES_QUEUE_NAME:-es_sync}
-    command: >
-      /bin/sh -c "rq worker --url ${REDIS_URL:-redis://redis:6379/0} ${ES_QUEUE_NAME:-es_sync}"
-    restart: unless-stopped
-    networks:
-      - context8-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   cleanup:
     build:

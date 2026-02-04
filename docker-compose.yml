@@ -21,14 +21,6 @@ services:
     networks:
       - context8-net
 
-  redis:
-    image: redis:7-alpine
-    container_name: ${CONTEXT8_REDIS_NAME:-context8-redis}
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    networks:
-      - context8-net
-
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
     container_name: ${CONTEXT8_ES_NAME:-context8-es}
@@ -68,8 +60,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
       elasticsearch:
         condition: service_started
       embedding:
@@ -79,7 +69,6 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
       DATABASE_SSL: ${DATABASE_SSL:-false}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ES_URL: ${ES_URL:-http://elasticsearch:9200}
       ES_INDEX: ${ES_INDEX:-solutions}
       ES_KNN_WEIGHT: ${ES_KNN_WEIGHT:-0}
@@ -98,58 +87,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  worker-embedding:
-    build:
-      context: ./backend
-    depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      embedding:
-        condition: service_started
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
-      DATABASE_SSL: ${DATABASE_SSL:-false}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      EMBED_QUEUE_NAME: ${EMBED_QUEUE_NAME:-embedding}
-      EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
-      EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
-    command: >
-      /bin/sh -c "rq worker --url ${REDIS_URL:-redis://redis:6379/0} ${EMBED_QUEUE_NAME:-embedding}"
-    restart: unless-stopped
-    networks:
-      - context8-net
-
-  worker-es:
-    build:
-      context: ./backend
-    container_name: ${CONTEXT8_WORKER_ES_NAME:-context8-worker-es}
-    depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_started
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
-      DATABASE_SSL: ${DATABASE_SSL:-false}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      ES_QUEUE_NAME: ${ES_QUEUE_NAME:-es_sync}
-      ES_URL: ${ES_URL:-http://elasticsearch:9200}
-      ES_INDEX: ${ES_INDEX:-solutions}
-      EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
-    command: >
-      /bin/sh -c "rq worker --url ${REDIS_URL:-redis://redis:6379/0} ${ES_QUEUE_NAME:-es_sync}"
-    restart: unless-stopped
-    networks:
-      - context8-net
 
   cleanup:
     build:
