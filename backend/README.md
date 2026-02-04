@@ -63,6 +63,32 @@ curl -X PATCH http://localhost:8000/apikeys/<id>/limits \
   -H "Content-Type: application/json" \
   -d '{"dailyLimit":500,"monthlyLimit":10000}'
 ```
+
+## Sub API Key（管理员）
+创建 sub key（可设置只读与限额）：
+```bash
+curl -X POST http://localhost:8000/apikeys/<parentId>/subkeys \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"readonly","canRead":true,"canWrite":false,"dailyLimit":200,"monthlyLimit":3000}'
+```
+列出 sub keys：
+```bash
+curl -X GET http://localhost:8000/apikeys/<parentId>/subkeys \
+  -H "Authorization: Bearer <token>"
+```
+更新 sub key 权限/限额：
+```bash
+curl -X PATCH http://localhost:8000/apikeys/<parentId>/subkeys/<subId> \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"canRead":true,"canWrite":true,"dailyLimit":500,"monthlyLimit":8000}'
+```
+撤销 sub key：
+```bash
+curl -X DELETE http://localhost:8000/apikeys/<parentId>/subkeys/<subId> \
+  -H "Authorization: Bearer <token>"
+```
 ## 保存与搜索 Solution
 说明：
 - Solution 归属到 API Key（写入时会绑定 key）。

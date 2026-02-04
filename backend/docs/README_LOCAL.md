@@ -246,6 +246,10 @@ See the interactive documentation at `/docs` for a complete API reference.
 - `POST /auth/login` - Login (admin)
 - `POST /apikeys` - Generate API key
 - `PATCH /apikeys/{id}/limits` - Update API key limits
+- `POST /apikeys/{id}/subkeys` - Create sub API key
+- `GET /apikeys/{id}/subkeys` - List sub API keys
+- `PATCH /apikeys/{id}/subkeys/{subId}` - Update sub API key
+- `DELETE /apikeys/{id}/subkeys/{subId}` - Revoke sub API key
 
 ## Monitoring
 
