@@ -208,15 +208,29 @@ async def _search_es(
   visibility: str | None,
 ):
   try:
-    return await asyncio.wait_for(
-      search_solutions_es(query, api_key_ids, allow_team, allow_admin, limit, offset, vector, visibility),
+    resp = await asyncio.wait_for(
+      search_solutions_es(
+        query,
+        api_key_ids,
+        allow_team,
+        allow_admin,
+        limit,
+        offset,
+        vector,
+        visibility,
+      ),
       timeout=SEARCH_ES_TIMEOUT,
     )
-  except asyncio.TimeoutError:
-    print(f"es search timed out after {SEARCH_ES_TIMEOUT}s, falling back")
-  except Exception as e:
-    print(f"es search failed, falling back: {e}")
-  return None
+  except asyncio.TimeoutError as exc:
+    raise HTTPException(
+      status_code=503, detail=f"Elasticsearch timed out after {SEARCH_ES_TIMEOUT}s"
+    ) from exc
+  except Exception as exc:
+    raise HTTPException(status_code=502, detail=f"Elasticsearch search failed: {exc}") from exc
+
+  if not resp:
+    raise HTTPException(status_code=503, detail="Elasticsearch is not configured (ES_URL missing)")
+  return resp
 
 async def _search_for_user(
   db: AsyncSession,
@@ -227,121 +241,60 @@ async def _search_for_user(
   limit: int,
   visibility: str | None = None,
 ) -> SearchResponse:
-  if limit <= 0:
-    total, _ = await search_solutions(db, query, api_key_ids, allow_team, allow_admin, 0, 0, visibility)
-    return SearchResponse(total=total, results=[])
-
-  accessible_total = await count_accessible_solutions(db, api_key_ids, allow_team, allow_admin, visibility)
-  if accessible_total == 0:
-    return SearchResponse(total=0, results=[])
-
   vector = None
   knn_enabled = _knn_enabled()
   if knn_enabled:
     vector = await _embed_query(query)
 
-  es_resp = await _search_es(query, api_key_ids, allow_team, allow_admin, limit, 0, vector if knn_enabled else None, visibility)
-  if es_resp:
-    hits = es_resp.get("hits", {}).get("hits", [])
-    results = []
-    for hit in hits:
-      source = hit.get("_source", {})
-      preview_msg = source.get("error_message", "") or ""
-      preview_ctx = source.get("context", "") or ""
-      results.append(
-        SearchResult(
-          id=source.get("id") or hit.get("_id"),
-          title=source.get("title", ""),
-          errorType=source.get("error_type", ""),
-          tags=_normalize_es_tags(source.get("tags")),
-          createdAt=source.get("created_at"),
-          preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
-          errorMessage=source.get("error_message"),
-          solution=source.get("solution"),
-          visibility=source.get("visibility"),
-          apiKeyId=source.get("api_key_id"),
-          vibecodingSoftware=source.get("vibecoding_software"),
-          upvotes=source.get("upvotes"),
-          downvotes=source.get("downvotes"),
-          voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
-        )
-      )
-    total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
-    if results:
-      await _bump_search_upvotes(
-        db,
-        [item.id for item in results],
-        api_key_ids,
-        allow_team,
-        allow_admin,
-      )
-      if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
-        print(f"search:es_hit results={len(results)}")
-      return SearchResponse(total=total, results=results)
-
-  try:
-    if vector is None:
-      vector = await _embed_query(query)
-    if vector:
-      vector_hits = await search_vector(db, vector, api_key_ids, allow_team, allow_admin, limit, visibility)
-      if vector_hits:
-        results = [
-          SearchResult(
-            id=h["id"],
-            title=h["title"],
-            errorType=h["errorType"],
-            tags=h["tags"],
-            createdAt=h["createdAt"],
-            preview=h["preview"],
-            errorMessage=h.get("errorMessage"),
-            solution=h.get("solution"),
-            visibility=h.get("visibility"),
-            apiKeyId=h.get("apiKeyId"),
-            vibecodingSoftware=h.get("vibecodingSoftware"),
-            upvotes=h.get("upvotes"),
-            downvotes=h.get("downvotes"),
-            voteScore=h.get("voteScore"),
-          )
-          for h in vector_hits
-        ]
-        await _bump_search_upvotes(
-          db,
-          [item.id for item in results],
-          api_key_ids,
-          allow_team,
-          allow_admin,
-        )
-        return SearchResponse(total=len(results), results=results)
-  except Exception as e:
-    print(f"vector search failed, falling back: {e}")
-
-  total, items = await search_solutions(db, query, api_key_ids, allow_team, allow_admin, limit, 0, visibility)
-  results = [
-    SearchResult(
-      id=i.id,
-      title=i.title,
-      errorType=i.error_type,
-      tags=i.tags,
-      createdAt=i.created_at,
-      preview=f"{i.error_message[:80]}{'...' if len(i.error_message) > 80 else ''} | {i.context[:50]}",
-      errorMessage=i.error_message,
-      solution=i.solution,
-      visibility=i.visibility,
-      apiKeyId=i.api_key_id,
-      vibecodingSoftware=i.vibecoding_software,
-      upvotes=i.upvotes,
-      downvotes=i.downvotes,
-      voteScore=(i.upvotes or 0) - (i.downvotes or 0),
-    )
-    for i in items
-  ]
-  await _bump_search_upvotes(
-    db,
-    [item.id for item in results],
+  es_resp = await _search_es(
+    query,
     api_key_ids,
     allow_team,
     allow_admin,
+    max(limit, 0),
+    0,
+    vector if knn_enabled else None,
+    visibility,
   )
+
+  hits = es_resp.get("hits", {}).get("hits", [])
+  results: list[SearchResult] = []
+  for hit in hits:
+    source = hit.get("_source", {})
+    preview_msg = source.get("error_message", "") or ""
+    preview_ctx = source.get("context", "") or ""
+    results.append(
+      SearchResult(
+        id=source.get("id") or hit.get("_id"),
+        title=source.get("title", ""),
+        errorType=source.get("error_type", ""),
+        tags=_normalize_es_tags(source.get("tags")),
+        createdAt=source.get("created_at"),
+        preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
+        errorMessage=source.get("error_message"),
+        solution=source.get("solution"),
+        visibility=source.get("visibility"),
+        apiKeyId=source.get("api_key_id"),
+        vibecodingSoftware=source.get("vibecoding_software"),
+        upvotes=source.get("upvotes"),
+        downvotes=source.get("downvotes"),
+        voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
+      )
+    )
+
+  total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
+
+  if results:
+    await _bump_search_upvotes(
+      db,
+      [item.id for item in results],
+      api_key_ids,
+      allow_team,
+      allow_admin,
+    )
+    if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
+      print(f"search:es_hit results={len(results)}")
+
   return SearchResponse(total=total, results=results)
 
 
@@ -1023,36 +976,6 @@ async def search(
     visibility_filter = normalize_visibility(payload.visibility) if payload.visibility else None
   except ValueError as exc:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-  if payload.limit <= 0:
-    total, _ = await search_solutions(
-      db,
-      payload.query,
-      scope["api_key_ids"],
-      scope["allow_team"],
-      scope.get("allow_admin", False),
-      0,
-      payload.offset,
-      visibility_filter,
-    )
-    if _timing_enabled():
-      total_ms = (time.perf_counter() - start) * 1000
-      print(f"timing:search path=zero_limit total_ms={total_ms:.2f}")
-    return SearchResponse(total=total, results=[])
-
-  count_start = time.perf_counter()
-  accessible_total = await count_accessible_solutions(
-    db,
-    scope["api_key_ids"],
-    scope["allow_team"],
-    scope.get("allow_admin", False),
-    visibility_filter,
-  )
-  count_ms = (time.perf_counter() - count_start) * 1000
-  if accessible_total == 0:
-    if _timing_enabled():
-      total_ms = (time.perf_counter() - start) * 1000
-      print(f"timing:search path=empty_accessible count_ms={count_ms:.2f} total_ms={total_ms:.2f}")
-    return SearchResponse(total=0, results=[])
 
   vector = None
   knn_enabled = _knn_enabled()
@@ -1069,156 +992,58 @@ async def search(
     scope["api_key_ids"],
     scope["allow_team"],
     scope.get("allow_admin", False),
-    payload.limit,
+    max(payload.limit, 0),
     payload.offset,
     vector if knn_enabled else None,
     visibility_filter,
   )
   es_ms = (time.perf_counter() - es_start) * 1000
-  if es_resp:
-    hits = es_resp.get("hits", {}).get("hits", [])
-    results = []
-    for hit in hits:
-      source = hit.get("_source", {})
-      preview_msg = source.get("error_message", "") or ""
-      preview_ctx = source.get("context", "") or ""
-      results.append(
-        SearchResult(
-          id=source.get("id") or hit.get("_id"),
-          title=source.get("title", ""),
-          errorType=source.get("error_type", ""),
-          tags=_normalize_es_tags(source.get("tags")),
-          createdAt=source.get("created_at"),
-          preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
-          errorMessage=source.get("error_message"),
-          solution=source.get("solution"),
-          visibility=source.get("visibility"),
-          apiKeyId=source.get("api_key_id"),
-          vibecodingSoftware=source.get("vibecoding_software"),
-          upvotes=source.get("upvotes"),
-          downvotes=source.get("downvotes"),
-          voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
-        )
-      )
-    total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
-    if results:
-      await _bump_search_upvotes(
-        db,
-        [item.id for item in results],
-        scope["api_key_ids"],
-        scope["allow_team"],
-        scope.get("allow_admin", False),
-      )
-      if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
-        print(f"search:es_hit results={len(results)}")
-      if _timing_enabled():
-        total_ms = (time.perf_counter() - start) * 1000
-        print(
-          "timing:search path=es "
-          f"count_ms={count_ms:.2f} embed_ms={embed_ms:.2f} "
-          f"es_ms={es_ms:.2f} total_ms={total_ms:.2f}"
-        )
-      return SearchResponse(total=total, results=results)
 
-  try:
-    if vector is None:
-      embed_start = time.perf_counter()
-      vector = await _embed_query(payload.query)
-      embed_ms = (time.perf_counter() - embed_start) * 1000
-    if vector:
-      vector_start = time.perf_counter()
-      vector_hits = await search_vector(
-        db,
-        vector,
-        scope["api_key_ids"],
-        scope["allow_team"],
-        scope.get("allow_admin", False),
-        payload.limit,
-        visibility_filter,
+  hits = es_resp.get("hits", {}).get("hits", [])
+  results: list[SearchResult] = []
+  for hit in hits:
+    source = hit.get("_source", {})
+    preview_msg = source.get("error_message", "") or ""
+    preview_ctx = source.get("context", "") or ""
+    results.append(
+      SearchResult(
+        id=source.get("id") or hit.get("_id"),
+        title=source.get("title", ""),
+        errorType=source.get("error_type", ""),
+        tags=_normalize_es_tags(source.get("tags")),
+        createdAt=source.get("created_at"),
+        preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
+        errorMessage=source.get("error_message"),
+        solution=source.get("solution"),
+        visibility=source.get("visibility"),
+        apiKeyId=source.get("api_key_id"),
+        vibecodingSoftware=source.get("vibecoding_software"),
+        upvotes=source.get("upvotes"),
+        downvotes=source.get("downvotes"),
+        voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
       )
-      vector_ms = (time.perf_counter() - vector_start) * 1000
-      if vector_hits:
-        results = [
-          SearchResult(
-            id=h["id"],
-            title=h["title"],
-            errorType=h["errorType"],
-            tags=h["tags"],
-            createdAt=h["createdAt"],
-            preview=h["preview"],
-            errorMessage=h.get("errorMessage"),
-            solution=h.get("solution"),
-            visibility=h.get("visibility"),
-            apiKeyId=h.get("apiKeyId"),
-            vibecodingSoftware=h.get("vibecodingSoftware"),
-            upvotes=h.get("upvotes"),
-            downvotes=h.get("downvotes"),
-            voteScore=h.get("voteScore"),
-          )
-          for h in vector_hits
-        ]
-        await _bump_search_upvotes(
-          db,
-          [item.id for item in results],
-          scope["api_key_ids"],
-          scope["allow_team"],
-          scope.get("allow_admin", False),
-        )
-        if _timing_enabled():
-          total_ms = (time.perf_counter() - start) * 1000
-          print(
-            "timing:search path=vector "
-            f"count_ms={count_ms:.2f} embed_ms={embed_ms:.2f} "
-            f"vector_ms={vector_ms:.2f} total_ms={total_ms:.2f}"
-          )
-        return SearchResponse(total=len(results), results=results)
-  except Exception as e:
-    print(f"vector search failed, falling back: {e}")
-
-  db_start = time.perf_counter()
-  total, items = await search_solutions(
-    db,
-    payload.query,
-    scope["api_key_ids"],
-    scope["allow_team"],
-    scope.get("allow_admin", False),
-    payload.limit,
-    payload.offset,
-    visibility_filter,
-  )
-  db_ms = (time.perf_counter() - db_start) * 1000
-  results = [
-    SearchResult(
-      id=i.id,
-      title=i.title,
-      errorType=i.error_type,
-      tags=i.tags,
-      createdAt=i.created_at,
-      preview=f"{i.error_message[:80]}{'...' if len(i.error_message) > 80 else ''} | {i.context[:50]}",
-      errorMessage=i.error_message,
-      solution=i.solution,
-      visibility=i.visibility,
-      apiKeyId=i.api_key_id,
-      vibecodingSoftware=i.vibecoding_software,
-      upvotes=i.upvotes,
-      downvotes=i.downvotes,
-      voteScore=(i.upvotes or 0) - (i.downvotes or 0),
     )
-    for i in items
-  ]
-  await _bump_search_upvotes(
-    db,
-    [item.id for item in results],
-    scope["api_key_ids"],
-    scope["allow_team"],
-    scope.get("allow_admin", False),
-  )
+
+  total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
+
+  if results:
+    await _bump_search_upvotes(
+      db,
+      [item.id for item in results],
+      scope["api_key_ids"],
+      scope["allow_team"],
+      scope.get("allow_admin", False),
+    )
+    if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
+      print(f"search:es_hit results={len(results)}")
+
   if _timing_enabled():
     total_ms = (time.perf_counter() - start) * 1000
     print(
-      "timing:search path=db "
-      f"count_ms={count_ms:.2f} db_ms={db_ms:.2f} total_ms={total_ms:.2f}"
+      "timing:search path=es "
+      f"embed_ms={embed_ms:.2f} es_ms={es_ms:.2f} total_ms={total_ms:.2f}"
     )
+
   return SearchResponse(total=total, results=results)
 
 
