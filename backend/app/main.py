@@ -232,6 +232,7 @@ async def require_solution_read_scope(
   jwt_user_id: str | None = None
   key_user_id: str | None = None
   key_scopes: list[KeyScope] = []
+  auth_source: str | None = None
 
   if authorization and authorization.startswith("Bearer "):
     token = authorization.split(" ", 1)[1]
@@ -266,6 +267,7 @@ async def require_solution_read_scope(
       api_key_ids.extend([item.id for item in sub_items])
       api_key_ids.extend(list(parent_ids))
     api_key_ids = list(dict.fromkeys(api_key_ids))
+    auth_source = "api_key"
 
   if jwt_user_id and key_user_id and jwt_user_id != key_user_id:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key does not belong to user")
@@ -281,6 +283,7 @@ async def require_solution_read_scope(
       if api_key_ids:
         sub_items = await list_active_sub_api_keys(db, api_key_ids)
         api_key_ids.extend([item.id for item in sub_items])
+      auth_source = "jwt"
 
   if not user_id and not raw_keys:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -290,6 +293,7 @@ async def require_solution_read_scope(
     "api_key_ids": api_key_ids,
     "allow_team": allow_team,
     "allow_admin": allow_admin,
+    "auth_source": auth_source,
   }
 
 
@@ -544,7 +548,7 @@ async def save_solution(
   )
 
 
-@app.get("/solutions", response_model=PaginatedSolutions)
+@app.get("/solutions", response_model=PaginatedSolutions | list[SolutionListItem])
 async def list_user_solutions(
   limit: int = 25,
   offset: int = 0,
@@ -565,25 +569,30 @@ async def list_user_solutions(
     offset,
     visibility_filter,
   )
+  payload_items = [
+    SolutionListItem(
+      id=i.id,
+      title=i.title,
+      errorMessage=i.error_message,
+      errorType=i.error_type,
+      tags=i.tags,
+      conversationLanguage=i.conversation_language,
+      programmingLanguage=i.programming_language,
+      vibecodingSoftware=i.vibecoding_software,
+      visibility=i.visibility,
+      upvotes=i.upvotes,
+      downvotes=i.downvotes,
+      voteScore=(i.upvotes or 0) - (i.downvotes or 0),
+      createdAt=i.created_at,
+    )
+    for i in items
+  ]
+
+  if scope.get("auth_source") == "api_key":
+    return payload_items
+
   return PaginatedSolutions(
-    items=[
-      SolutionListItem(
-        id=i.id,
-        title=i.title,
-        errorMessage=i.error_message,
-        errorType=i.error_type,
-        tags=i.tags,
-        conversationLanguage=i.conversation_language,
-        programmingLanguage=i.programming_language,
-        vibecodingSoftware=i.vibecoding_software,
-        visibility=i.visibility,
-        upvotes=i.upvotes,
-        downvotes=i.downvotes,
-        voteScore=(i.upvotes or 0) - (i.downvotes or 0),
-        createdAt=i.created_at,
-      )
-      for i in items
-    ],
+    items=payload_items,
     total=total,
     limit=limit,
     offset=offset,

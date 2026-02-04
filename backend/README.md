@@ -129,6 +129,9 @@ curl -X DELETE http://localhost:8000/apikeys/<parentId>/subkeys/<subId> \
     -H "X-API-Key: <apiKey>"
   ```
 
+注意：为了兼容 Context8 MCP，使用 `X-API-Key` 访问 `GET /solutions` 时返回数组；
+管理员 JWT 访问时返回分页对象 `{items,total,limit,offset}`。
+
 ## 其他
 - 迁移脚本 `alembic/versions/da16b97d5c07_add_email_verification_system.py` 幂等建表/扩展，EMBEDDING_DIM 取 env 或默认 384。
 - 嵌入为确定性占位实现，需替换为真实模型时只改 `app/embeddings.py`。

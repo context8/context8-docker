@@ -240,6 +240,7 @@ See the interactive documentation at `/docs` for a complete API reference.
 ### Main Endpoints:
 - `POST /solutions` - Create a new error solution
 - `GET /solutions` - List user's solutions
+  - `X-API-Key` 返回数组（MCP 兼容）；JWT 返回分页对象
 - `GET /solutions/{id}` - Get a specific solution
 - `POST /search` - Search for solutions
 - `POST /auth/setup` - Create the first admin
