@@ -44,7 +44,13 @@ from .es import (
   ensure_es_index,
 )
 from .embeddings import embed_text
-from .api_keys import router as apikey_router, resolve_api_keys, list_active_api_keys, ApiKey
+from .api_keys import (
+  router as apikey_router,
+  resolve_api_keys,
+  list_active_api_keys,
+  list_active_sub_api_keys,
+  KeyScope,
+)
 from jose import jwt
 from .config import JWT_SECRET, JWT_ALG
 from .visibility import VISIBILITY_PRIVATE, normalize_visibility
@@ -130,16 +136,16 @@ async def _count_solutions_since(db: AsyncSession, api_key_id: str, since: datet
   return res.scalar() or 0
 
 
-async def _enforce_api_key_limits(db: AsyncSession, api_key: ApiKey) -> None:
-  daily_limit = api_key.daily_limit
-  monthly_limit = api_key.monthly_limit
+async def _enforce_api_key_limits(db: AsyncSession, key_scope: KeyScope) -> None:
+  daily_limit = key_scope.daily_limit
+  monthly_limit = key_scope.monthly_limit
   if daily_limit is None and monthly_limit is None:
     return
 
   now = datetime.now(timezone.utc)
   if daily_limit is not None:
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    daily_count = await _count_solutions_since(db, api_key.id, day_start)
+    daily_count = await _count_solutions_since(db, key_scope.api_key_id, day_start)
     if daily_count >= daily_limit:
       raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -148,7 +154,7 @@ async def _enforce_api_key_limits(db: AsyncSession, api_key: ApiKey) -> None:
 
   if monthly_limit is not None:
     month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    monthly_count = await _count_solutions_since(db, api_key.id, month_start)
+    monthly_count = await _count_solutions_since(db, key_scope.api_key_id, month_start)
     if monthly_count >= monthly_limit:
       raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -225,6 +231,7 @@ async def require_solution_read_scope(
   user_id = None
   jwt_user_id: str | None = None
   key_user_id: str | None = None
+  key_scopes: list[KeyScope] = []
 
   if authorization and authorization.startswith("Bearer "):
     token = authorization.split(" ", 1)[1]
@@ -241,12 +248,24 @@ async def require_solution_read_scope(
       raw_keys.append(token)
 
   if raw_keys:
-    key_items = await resolve_api_keys(db, raw_keys)
-    if not key_items:
+    key_scopes = await resolve_api_keys(db, raw_keys)
+    if not key_scopes:
       print("[auth] api key not resolved")
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    key_user_id = str(key_items[0].user_id)
-    api_key_ids = [item.id for item in key_items]
+    if any(not scope.can_read for scope in key_scopes):
+      raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key read access denied")
+    key_user_id = key_scopes[0].user_id
+    if any(scope.user_id != key_user_id for scope in key_scopes):
+      raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API keys belong to different users")
+
+    api_key_ids = [scope.api_key_id for scope in key_scopes]
+    parent_ids = {scope.key_id for scope in key_scopes if not scope.is_sub}
+    parent_ids.update({scope.parent_id for scope in key_scopes if scope.is_sub and scope.parent_id})
+    if parent_ids:
+      sub_items = await list_active_sub_api_keys(db, list(parent_ids))
+      api_key_ids.extend([item.id for item in sub_items])
+      api_key_ids.extend(list(parent_ids))
+    api_key_ids = list(dict.fromkeys(api_key_ids))
 
   if jwt_user_id and key_user_id and jwt_user_id != key_user_id:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key does not belong to user")
@@ -259,6 +278,9 @@ async def require_solution_read_scope(
     if not api_key_ids:
       key_items = await list_active_api_keys(db, user_id)
       api_key_ids = [item.id for item in key_items]
+      if api_key_ids:
+        sub_items = await list_active_sub_api_keys(db, api_key_ids)
+        api_key_ids.extend([item.id for item in sub_items])
 
   if not user_id and not raw_keys:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -283,15 +305,22 @@ async def require_solution_write_scope(
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Multiple API keys not allowed for write")
 
   if raw_keys:
-    key_items = await resolve_api_keys(db, raw_keys)
-    if not key_items:
+    key_scopes = await resolve_api_keys(db, raw_keys)
+    if not key_scopes:
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    key_item = key_items[0]
-    user = await ensure_user(db, str(key_item.user_id))
+    key_scope = key_scopes[0]
+    if not key_scope.can_write:
+      raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key write access denied")
+    user = await ensure_user(db, str(key_scope.user_id))
+    api_key_ids = [key_scope.api_key_id]
+    if not key_scope.is_sub:
+      sub_items = await list_active_sub_api_keys(db, [key_scope.key_id])
+      api_key_ids.extend([item.id for item in sub_items])
     return {
-      "user_id": str(key_item.user_id),
-      "api_key": key_item,
-      "api_key_ids": [key_item.id],
+      "user_id": str(key_scope.user_id),
+      "write_key_id": key_scope.api_key_id,
+      "api_key_ids": api_key_ids,
+      "key_scope": key_scope,
       "allow_admin": False,
     }
 
@@ -307,13 +336,21 @@ async def require_solution_write_scope(
       )
       jwt_user_id = data.get("sub")
     except Exception:
-      key_items = await resolve_api_keys(db, [token])
-      if key_items:
-        key_item = key_items[0]
-        user = await ensure_user(db, str(key_item.user_id))
+      key_scopes = await resolve_api_keys(db, [token])
+      if key_scopes:
+        key_scope = key_scopes[0]
+        if not key_scope.can_write:
+          raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="API key write access denied")
+        user = await ensure_user(db, str(key_scope.user_id))
+        api_key_ids = [key_scope.api_key_id]
+        if not key_scope.is_sub:
+          sub_items = await list_active_sub_api_keys(db, [key_scope.key_id])
+          api_key_ids.extend([item.id for item in sub_items])
         return {
-          "user_id": str(key_item.user_id),
-          "api_key": key_item,
+          "user_id": str(key_scope.user_id),
+          "write_key_id": key_scope.api_key_id,
+          "api_key_ids": api_key_ids,
+          "key_scope": key_scope,
           "allow_admin": False,
         }
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
@@ -322,10 +359,25 @@ async def require_solution_write_scope(
     key_items = await list_active_api_keys(db, str(jwt_user_id))
     if not key_items:
       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key required for write")
+    parent_ids = [item.id for item in key_items]
+    sub_items = await list_active_sub_api_keys(db, parent_ids)
+    primary_key = key_items[0]
+    key_scope = KeyScope(
+      key_id=primary_key.id,
+      api_key_id=primary_key.id,
+      user_id=str(primary_key.user_id),
+      is_sub=False,
+      parent_id=None,
+      can_read=True,
+      can_write=True,
+      daily_limit=primary_key.daily_limit,
+      monthly_limit=primary_key.monthly_limit,
+    )
     return {
       "user_id": str(jwt_user_id),
-      "api_key": key_items[0],
-      "api_key_ids": [item.id for item in key_items],
+      "write_key_id": key_items[0].id,
+      "api_key_ids": parent_ids + [item.id for item in sub_items],
+      "key_scope": key_scope,
       "allow_admin": bool(user.is_admin),
     }
 
@@ -375,14 +427,15 @@ async def save_solution(
   scope: dict = Depends(require_solution_write_scope),
 ):
   start = time.perf_counter()
-  key_item: ApiKey = scope["api_key"]
+  key_scope: KeyScope = scope["key_scope"]
   user_id = scope["user_id"]
+  write_key_id = scope["write_key_id"]
   try:
     visibility = normalize_visibility(payload.visibility) or VISIBILITY_PRIVATE
   except ValueError as exc:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-  await _enforce_api_key_limits(db, key_item)
-  sol = await create_solution(db, payload, key_item.id, user_id, visibility)
+  await _enforce_api_key_limits(db, key_scope)
+  sol = await create_solution(db, payload, write_key_id, user_id, visibility)
   db_ms = (time.perf_counter() - start) * 1000
 
   embedding: list[float] | None = None

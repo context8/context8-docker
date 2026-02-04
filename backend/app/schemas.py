@@ -163,3 +163,40 @@ class ApiKeyOut(BaseModel):
 
     class Config:
         populate_by_name = True
+
+
+class SubApiKeyCreate(BaseModel):
+    name: str
+    canRead: Optional[bool] = True
+    canWrite: Optional[bool] = True
+    dailyLimit: Optional[int] = Field(default=None, ge=0)
+    monthlyLimit: Optional[int] = Field(default=None, ge=0)
+
+    class Config:
+        populate_by_name = True
+
+
+class SubApiKeyUpdate(BaseModel):
+    name: Optional[str] = None
+    canRead: Optional[bool] = None
+    canWrite: Optional[bool] = None
+    dailyLimit: Optional[int] = Field(default=None, ge=0)
+    monthlyLimit: Optional[int] = Field(default=None, ge=0)
+
+    class Config:
+        populate_by_name = True
+
+
+class SubApiKeyOut(BaseModel):
+    id: str
+    parentId: str
+    name: str
+    createdAt: datetime
+    canRead: bool
+    canWrite: bool
+    dailyLimit: Optional[int] = None
+    monthlyLimit: Optional[int] = None
+    apiKey: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
