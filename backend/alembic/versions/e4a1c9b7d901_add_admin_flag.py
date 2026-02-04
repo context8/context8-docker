@@ -15,11 +15,17 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(inspector, table: str, column: str) -> bool:
+    return any(col["name"] == column for col in inspector.get_columns(table))
+
+
 def upgrade() -> None:
-    op.add_column(
-        "users",
-        sa.Column("is_admin", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-    )
+    inspector = sa.inspect(op.get_bind())
+    if not _has_column(inspector, "users", "is_admin"):
+        op.add_column(
+            "users",
+            sa.Column("is_admin", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        )
 
 
 def downgrade() -> None:

@@ -15,8 +15,14 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(inspector, table: str, column: str) -> bool:
+    return any(col["name"] == column for col in inspector.get_columns(table))
+
+
 def upgrade() -> None:
-    op.add_column("solutions", sa.Column("vibecoding_software", sa.String(), nullable=True))
+    inspector = sa.inspect(op.get_bind())
+    if not _has_column(inspector, "solutions", "vibecoding_software"):
+        op.add_column("solutions", sa.Column("vibecoding_software", sa.String(), nullable=True))
 
 
 def downgrade() -> None:
