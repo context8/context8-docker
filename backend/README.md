@@ -48,8 +48,20 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```bash
 curl -X POST http://localhost:8000/apikeys \
   -H "Authorization: Bearer <token>" \
-  -d "name=default"
+  -H "Content-Type: application/json" \
+  -d '{"name":"default","dailyLimit":1000,"monthlyLimit":20000}'
 # 响应里取出 apiKey，后续请求用 X-API-Key
+```
+可选设置限额（为空表示不限）：
+- `dailyLimit`: 每日写入上限
+- `monthlyLimit`: 每月写入上限
+
+更新已有 API Key 限额：
+```bash
+curl -X PATCH http://localhost:8000/apikeys/<id>/limits \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dailyLimit":500,"monthlyLimit":10000}'
 ```
 ## 保存与搜索 Solution
 说明：

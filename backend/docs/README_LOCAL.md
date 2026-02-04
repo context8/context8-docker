@@ -245,6 +245,7 @@ See the interactive documentation at `/docs` for a complete API reference.
 - `POST /auth/setup` - Create the first admin
 - `POST /auth/login` - Login (admin)
 - `POST /apikeys` - Generate API key
+- `PATCH /apikeys/{id}/limits` - Update API key limits
 
 ## Monitoring
 
