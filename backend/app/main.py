@@ -35,7 +35,6 @@ from .crud import (
   get_solution,
   list_solutions,
   delete_solution,
-  search_solutions,
   count_accessible_solutions,
   update_solution_visibility,
   get_solution_vote,
@@ -43,7 +42,6 @@ from .crud import (
   clear_solution_vote,
   bump_upvotes,
 )
-from .vector import init_vector_store, search_vector
 from .es import search_solutions_es, fetch_solution_es
 from .embeddings import embed_text
 from .worker import enqueue_embedding_task, enqueue_es_sync_task, enqueue_es_delete_task
@@ -608,7 +606,6 @@ async def on_startup():
     await conn.execute(text("CREATE EXTENSION IF NOT EXISTS citext"))
     await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     await conn.run_sync(Base.metadata.create_all)
-  await init_vector_store()
 
 
 @app.post("/solutions", response_model=SolutionOut, response_model_exclude={"embedding"})
