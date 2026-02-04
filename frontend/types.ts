@@ -6,6 +6,18 @@ export interface ApiKey {
   monthlyLimit?: number | null;
 }
 
+export interface SubApiKey {
+  id: string;
+  parentId: string;
+  name: string;
+  createdAt?: string;
+  canRead: boolean;
+  canWrite: boolean;
+  dailyLimit?: number | null;
+  monthlyLimit?: number | null;
+  apiKey?: string;
+}
+
 export type View = 'home' | 'dashboard' | 'login';
 export type ThemeMode = 'light' | 'dark';
 export type Visibility = 'private' | 'team';

@@ -1,5 +1,5 @@
 import { request } from './client';
-import { ApiKey } from '../../types';
+import { ApiKey, SubApiKey } from '../../types';
 
 export const apiKeysService = {
   async list(token: string): Promise<ApiKey[]> {
@@ -39,6 +39,59 @@ export const apiKeysService = {
         method: 'PATCH',
         body: JSON.stringify(payload),
       },
+      { token }
+    );
+  },
+
+  async listSubKeys(token: string, parentId: string): Promise<SubApiKey[]> {
+    return request<SubApiKey[]>(
+      `/apikeys/${parentId}/subkeys`,
+      { method: 'GET' },
+      { token }
+    );
+  },
+
+  async createSubKey(
+    token: string,
+    parentId: string,
+    payload: {
+      name: string;
+      canRead: boolean;
+      canWrite: boolean;
+      dailyLimit?: number | null;
+      monthlyLimit?: number | null;
+    }
+  ): Promise<SubApiKey> {
+    return request(
+      `/apikeys/${parentId}/subkeys`,
+      { method: 'POST', body: JSON.stringify(payload) },
+      { token }
+    );
+  },
+
+  async updateSubKey(
+    token: string,
+    parentId: string,
+    subId: string,
+    payload: {
+      name?: string;
+      canRead?: boolean;
+      canWrite?: boolean;
+      dailyLimit?: number | null;
+      monthlyLimit?: number | null;
+    }
+  ): Promise<SubApiKey> {
+    return request(
+      `/apikeys/${parentId}/subkeys/${subId}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
+      { token }
+    );
+  },
+
+  async deleteSubKey(token: string, parentId: string, subId: string): Promise<void> {
+    return request(
+      `/apikeys/${parentId}/subkeys/${subId}`,
+      { method: 'DELETE' },
       { token }
     );
   },

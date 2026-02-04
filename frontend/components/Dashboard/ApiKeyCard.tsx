@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Trash2, Key, Check, SlidersHorizontal } from 'lucide-react';
+import { Copy, Trash2, Key, Check, SlidersHorizontal, Users } from 'lucide-react';
 import { ApiKey } from '../../types';
 import { Button } from '../Common/Button';
 
@@ -7,6 +7,7 @@ export interface ApiKeyCardProps {
   apiKey: ApiKey;
   onRequestDelete: (id: string) => void;
   onEditLimits?: (id: string) => void;
+  onManageSubKeys?: (id: string) => void;
   onCopy?: () => void;
   theme: 'light' | 'dark';
   solutionCount?: number;
@@ -16,6 +17,7 @@ export const ApiKeyCard: React.FC<ApiKeyCardProps> = ({
   apiKey,
   onRequestDelete,
   onEditLimits,
+  onManageSubKeys,
   onCopy,
   theme,
   solutionCount = 0,
@@ -95,6 +97,16 @@ export const ApiKeyCard: React.FC<ApiKeyCardProps> = ({
           >
             <SlidersHorizontal size={14} />
             <span className="ml-1">Edit limits</span>
+          </Button>
+        )}
+        {onManageSubKeys && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onManageSubKeys(apiKey.id)}
+          >
+            <Users size={14} />
+            <span className="ml-1">Sub keys</span>
           </Button>
         )}
         <Button
