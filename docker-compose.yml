@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     container_name: ${CONTEXT8_POSTGRES_NAME:-context8-postgres}
     environment:
       POSTGRES_DB: context8
@@ -71,6 +71,10 @@ services:
       ES_KNN_WEIGHT: ${ES_KNN_WEIGHT:-0}
       ES_BM25_WEIGHT: ${ES_BM25_WEIGHT:-1}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
+      REMOTE_CONTEXT8_BASE: ${REMOTE_CONTEXT8_BASE:-}
+      REMOTE_CONTEXT8_API_KEY: ${REMOTE_CONTEXT8_API_KEY:-}
+      REMOTE_CONTEXT8_ALLOW_OVERRIDE: ${REMOTE_CONTEXT8_ALLOW_OVERRIDE:-true}
+      REMOTE_CONTEXT8_TIMEOUT: ${REMOTE_CONTEXT8_TIMEOUT:-6}
     command: >
       /bin/sh -c "alembic upgrade head && python local_server.py --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"
     ports:

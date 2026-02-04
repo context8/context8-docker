@@ -1,11 +1,7 @@
-from sqlalchemy import Column, String, Text, DateTime, JSON, Integer, Boolean, CheckConstraint, Index, text
+from sqlalchemy import Column, String, Text, DateTime, JSON, Integer, CheckConstraint, Index, text
 from sqlalchemy.sql import func
-from pgvector.sqlalchemy import Vector
 from .database import Base
 from .visibility import VISIBILITY_PRIVATE
-import os
-
-EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "384"))
 
 
 class Solution(Base):
@@ -31,7 +27,6 @@ class Solution(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     project_path = Column(String, nullable=True)
     environment = Column(JSON, nullable=True)
-    embedding = Column(Vector(EMBEDDING_DIM), nullable=True)
     embedding_status = Column(String, nullable=False, server_default=text("'pending'"))
     embedding_error = Column(Text, nullable=True)
     embedding_updated_at = Column(DateTime(timezone=True), nullable=True)

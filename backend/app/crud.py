@@ -35,7 +35,6 @@ async def create_solution(
       vibecoding_software=data.vibecodingSoftware,
       project_path=data.projectPath,
       environment=data.environment,
-      embedding=data.embedding,
       embedding_status="pending",
       visibility=visibility,
     )

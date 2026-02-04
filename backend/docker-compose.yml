@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     container_name: context8-postgres
     environment:
       POSTGRES_DB: context8
@@ -19,6 +19,39 @@ services:
     networks:
       - context8-network
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    container_name: context8-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "${ES_PORT:-9200}:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - context8-network
+
+  embedding:
+    build:
+      context: ../embedding
+    container_name: context8-embedding
+    profiles: ["semantic"]
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      PORT: 8001
+    ports:
+      - "${EMBEDDING_PORT:-8001}:8001"
+    networks:
+      - context8-network
+
   api:
     build:
       context: .
@@ -27,8 +60,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      elasticsearch:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
+      ES_URL: ${ES_URL:-http://elasticsearch:9200}
+      ES_INDEX: ${ES_INDEX:-solutions}
+      ES_KNN_WEIGHT: ${ES_KNN_WEIGHT:-0}
+      ES_BM25_WEIGHT: ${ES_BM25_WEIGHT:-1}
+      EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
+      REMOTE_CONTEXT8_BASE: ${REMOTE_CONTEXT8_BASE:-}
+      REMOTE_CONTEXT8_API_KEY: ${REMOTE_CONTEXT8_API_KEY:-}
+      REMOTE_CONTEXT8_ALLOW_OVERRIDE: ${REMOTE_CONTEXT8_ALLOW_OVERRIDE:-true}
+      REMOTE_CONTEXT8_TIMEOUT: ${REMOTE_CONTEXT8_TIMEOUT:-6}
     command: >
       /bin/sh -c "python local_server.py --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"
     ports:
@@ -46,6 +90,7 @@ services:
 
 volumes:
   postgres_data:
+  es_data:
 
 networks:
   context8-network:

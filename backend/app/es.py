@@ -13,11 +13,45 @@ ES_USERNAME = os.environ.get("ES_USERNAME")
 ES_PASSWORD = os.environ.get("ES_PASSWORD")
 ES_KNN_WEIGHT = float(os.environ.get("ES_KNN_WEIGHT", "0"))
 ES_BM25_WEIGHT = float(os.environ.get("ES_BM25_WEIGHT", "1"))
+EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM", "384"))
 
 def _require_es_url() -> str:
     if not ES_URL:
         raise RuntimeError("Elasticsearch is not configured (ES_URL missing)")
     return ES_URL
+
+
+def build_es_mapping(include_embedding: bool) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "id": {"type": "keyword"},
+        "user_id": {"type": "keyword"},
+        "api_key_id": {"type": "keyword"},
+        "title": {"type": "text"},
+        "error_message": {"type": "text"},
+        "error_type": {"type": "keyword"},
+        "context": {"type": "text"},
+        "root_cause": {"type": "text"},
+        "solution": {"type": "text"},
+        "code_changes": {"type": "object", "enabled": False},
+        "tags": {"type": "keyword"},
+        "conversation_language": {"type": "keyword"},
+        "programming_language": {"type": "keyword"},
+        "vibecoding_software": {"type": "keyword"},
+        "project_path": {"type": "keyword"},
+        "environment": {"type": "object", "enabled": False},
+        "visibility": {"type": "keyword"},
+        "created_at": {"type": "date"},
+        "upvotes": {"type": "integer"},
+        "downvotes": {"type": "integer"},
+    }
+    if include_embedding:
+        properties["embedding"] = {
+            "type": "dense_vector",
+            "dims": EMBEDDING_DIM,
+            "index": True,
+            "similarity": "l2_norm",
+        }
+    return {"mappings": {"properties": properties}}
 
 
 def _auth() -> Optional[tuple[str, str]]:
@@ -229,4 +263,18 @@ async def delete_solution_es(doc_id: str) -> None:
         resp = await client.delete(f"{es_url}/{ES_INDEX}/_doc/{doc_id}")
         if resp.status_code in (200, 404):
             return
+        resp.raise_for_status()
+
+
+async def ensure_es_index() -> None:
+    if not ES_URL:
+        return
+    include_embedding = ES_KNN_WEIGHT > 0
+    async with httpx.AsyncClient(timeout=ES_TIMEOUT, auth=_auth()) as client:
+        head = await client.head(f"{ES_URL}/{ES_INDEX}")
+        if head.status_code == 200:
+            return
+        if head.status_code != 404:
+            head.raise_for_status()
+        resp = await client.put(f"{ES_URL}/{ES_INDEX}", json=build_es_mapping(include_embedding))
         resp.raise_for_status()

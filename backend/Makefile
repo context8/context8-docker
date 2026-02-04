@@ -1,4 +1,4 @@
-.PHONY: help install setup dev prod cleanup test migrate clean
+.PHONY: help install setup dev prod test migrate clean
 
 help:
 	@echo "Context8 CLI - Local Deployment Commands"
@@ -10,8 +10,7 @@ help:
 	@echo ""
 	@echo "Running:"
 	@echo "  make dev         Run development server (auto-reload)"
-	@echo "  make prod        Run production server (4 workers)"
-	@echo "  make cleanup     Run cleanup task once"
+	@echo "  make prod        Run production server (1 worker)"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make test        Run tests"
@@ -35,13 +34,7 @@ dev:
 	python local_server.py --reload
 
 prod:
-	python local_server.py --host 0.0.0.0 --port 8000 --workers 4
-
-cleanup:
-	python local_cleanup.py
-
-cleanup-schedule:
-	python local_cleanup.py --schedule --interval 6
+	python local_server.py --host 0.0.0.0 --port 8000 --workers 1
 
 test:
 	pytest

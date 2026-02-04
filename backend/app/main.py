@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
-from .database import Base, engine, get_session
+from .database import get_session
 from .schemas import (
   SolutionCreate,
   SolutionOut,
@@ -40,13 +39,14 @@ from .es import (
   index_solution_es,
   update_solution_es,
   delete_solution_es,
+  ensure_es_index,
 )
 from .embeddings import embed_text
 from .api_keys import router as apikey_router, resolve_api_keys, list_active_api_keys, ApiKey
-from .users import User
 from jose import jwt
 from .config import JWT_SECRET, JWT_ALG
 from .visibility import VISIBILITY_PRIVATE, normalize_visibility
+from .remote import resolve_remote_config, remote_search
 from .auth import (
     SessionResponse,
     UserResponse,
@@ -325,14 +325,13 @@ app.include_router(auth_router)
 
 @app.on_event("startup")
 async def on_startup():
-  async with engine.begin() as conn:
-    # Enable required PostgreSQL extensions
-    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS citext"))
-    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    await conn.run_sync(Base.metadata.create_all)
+  try:
+    await ensure_es_index()
+  except Exception as exc:
+    print(f"[es] ensure index failed: {exc}")
 
 
-@app.post("/solutions", response_model=SolutionOut, response_model_exclude={"embedding"})
+@app.post("/solutions", response_model=SolutionOut)
 async def save_solution(
   payload: SolutionCreate,
   db: AsyncSession = Depends(get_session),
@@ -447,7 +446,6 @@ async def save_solution(
     myVote=None,
     projectPath=sol.project_path,
     environment=sol.environment,
-    embedding=sol.embedding,
     embedding_status=sol.embedding_status,
     embedding_error=sol.embedding_error,
     embedding_updated_at=sol.embedding_updated_at,
@@ -521,7 +519,7 @@ async def count_user_solutions(
   return CountResponse(total=total)
 
 
-@app.get("/solutions/{solution_id}", response_model=SolutionOut, response_model_exclude={"embedding"})
+@app.get("/solutions/{solution_id}", response_model=SolutionOut)
 async def fetch_solution(
   solution_id: str,
   db: AsyncSession = Depends(get_session),
@@ -562,7 +560,6 @@ async def fetch_solution(
     myVote=my_vote,
     projectPath=sol.project_path,
     environment=sol.environment,
-    embedding=sol.embedding,
     embedding_status=sol.embedding_status,
     embedding_error=sol.embedding_error,
     embedding_updated_at=sol.embedding_updated_at,
@@ -570,7 +567,7 @@ async def fetch_solution(
   )
 
 
-@app.get("/solutions/{solution_id}/es", response_model=SolutionOut, response_model_exclude={"embedding"})
+@app.get("/solutions/{solution_id}/es", response_model=SolutionOut)
 async def fetch_solution_es_detail(
   solution_id: str,
   scope: dict = Depends(require_solution_read_scope),
@@ -603,7 +600,6 @@ async def fetch_solution_es_detail(
     myVote=None,
     projectPath=source.get("project_path"),
     environment=source.get("environment"),
-    embedding=None,
     embedding_status=None,
     embedding_error=None,
     embedding_updated_at=None,
@@ -742,6 +738,8 @@ async def search(
   payload: SearchRequest,
   db: AsyncSession = Depends(get_session),
   scope: dict = Depends(require_solution_read_scope),
+  x_remote_base: str | None = Header(default=None, alias="X-Remote-Base"),
+  x_remote_api_key: str | None = Header(default=None, alias="X-Remote-Api-Key"),
 ):
   start = time.perf_counter()
   try:
@@ -749,63 +747,116 @@ async def search(
   except ValueError as exc:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-  vector = None
-  knn_enabled = _knn_enabled()
-  if knn_enabled:
-    embed_start = time.perf_counter()
-    vector = await _embed_query(payload.query)
-    embed_ms = (time.perf_counter() - embed_start) * 1000
-  else:
-    embed_ms = 0.0
+  source_mode = payload.source or "local"
+  if source_mode not in ("local", "remote", "all"):
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid source")
 
-  es_start = time.perf_counter()
-  es_resp = await _search_es(
-    payload.query,
-    scope["api_key_ids"],
-    scope["allow_team"],
-    scope.get("allow_admin", False),
-    max(payload.limit, 0),
-    payload.offset,
-    vector if knn_enabled else None,
-    visibility_filter,
-  )
-  es_ms = (time.perf_counter() - es_start) * 1000
-
-  hits = es_resp.get("hits", {}).get("hits", [])
-  results: list[SearchResult] = []
-  for hit in hits:
-    source = hit.get("_source", {})
-    preview_msg = source.get("error_message", "") or ""
-    preview_ctx = source.get("context", "") or ""
-    results.append(
-      SearchResult(
-        id=source.get("id") or hit.get("_id"),
-        title=source.get("title", ""),
-        errorType=source.get("error_type", ""),
-        tags=_normalize_es_tags(source.get("tags")),
-        createdAt=source.get("created_at"),
-        preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
-        errorMessage=source.get("error_message"),
-        solution=source.get("solution"),
-        visibility=source.get("visibility"),
-        apiKeyId=source.get("api_key_id"),
-        vibecodingSoftware=source.get("vibecoding_software"),
-        upvotes=source.get("upvotes"),
-        downvotes=source.get("downvotes"),
-        voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
+  def _build_local_results(es_resp: dict) -> list[SearchResult]:
+    hits = es_resp.get("hits", {}).get("hits", [])
+    built: list[SearchResult] = []
+    for hit in hits:
+      source = hit.get("_source", {})
+      preview_msg = source.get("error_message", "") or ""
+      preview_ctx = source.get("context", "") or ""
+      built.append(
+        SearchResult(
+          id=source.get("id") or hit.get("_id"),
+          title=source.get("title", ""),
+          errorType=source.get("error_type", ""),
+          tags=_normalize_es_tags(source.get("tags")),
+          createdAt=source.get("created_at"),
+          preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
+          errorMessage=source.get("error_message"),
+          solution=source.get("solution"),
+          visibility=source.get("visibility"),
+          apiKeyId=source.get("api_key_id"),
+          vibecodingSoftware=source.get("vibecoding_software"),
+          upvotes=source.get("upvotes"),
+          downvotes=source.get("downvotes"),
+          voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
+          source="local",
+        )
       )
+    return built
+
+  def _build_remote_results(remote_resp: dict) -> list[SearchResult]:
+    items = remote_resp.get("results") or []
+    built: list[SearchResult] = []
+    for item in items:
+      built.append(
+        SearchResult(
+          id=item.get("id"),
+          title=item.get("title") or "",
+          errorType=item.get("errorType") or item.get("error_type") or "",
+          tags=item.get("tags") or [],
+          createdAt=item.get("createdAt") or item.get("created_at"),
+          preview=item.get("preview") or "",
+          errorMessage=item.get("errorMessage") or item.get("error_message"),
+          solution=item.get("solution"),
+          visibility=item.get("visibility"),
+          apiKeyId=item.get("apiKeyId") or item.get("api_key_id"),
+          vibecodingSoftware=item.get("vibecodingSoftware") or item.get("vibecoding_software"),
+          upvotes=item.get("upvotes"),
+          downvotes=item.get("downvotes"),
+          voteScore=item.get("voteScore"),
+          source="remote",
+        )
+      )
+    return built
+
+  results: list[SearchResult] = []
+  total = 0
+  embed_ms = 0.0
+  es_ms = 0.0
+
+  if source_mode in ("local", "all"):
+    vector = None
+    knn_enabled = _knn_enabled()
+    if knn_enabled:
+      embed_start = time.perf_counter()
+      vector = await _embed_query(payload.query)
+      embed_ms = (time.perf_counter() - embed_start) * 1000
+
+    es_start = time.perf_counter()
+    es_resp = await _search_es(
+      payload.query,
+      scope["api_key_ids"],
+      scope["allow_team"],
+      scope.get("allow_admin", False),
+      max(payload.limit, 0),
+      payload.offset,
+      vector if knn_enabled else None,
+      visibility_filter,
     )
+    es_ms = (time.perf_counter() - es_start) * 1000
 
-  total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
+    local_results = _build_local_results(es_resp)
+    results.extend(local_results)
+    total += es_resp.get("hits", {}).get("total", {}).get("value", len(local_results))
 
-  if results:
-    if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
-      print(f"search:es_hit results={len(results)}")
+  if source_mode in ("remote", "all"):
+    remote_base, remote_key = resolve_remote_config(x_remote_base, x_remote_api_key)
+    remote_payload = {
+      "query": payload.query,
+      "limit": payload.limit,
+      "offset": payload.offset,
+      "visibility": payload.visibility,
+    }
+    remote_resp = await remote_search(remote_base, remote_key, remote_payload)
+    remote_results = _build_remote_results(remote_resp)
+    results.extend(remote_results)
+    total += remote_resp.get("total", len(remote_results))
+
+  if source_mode == "all" and payload.limit > 0:
+    results = results[: payload.limit]
+
+  if results and os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
+    print(f"search:es_hit results={len(results)}")
 
   if _timing_enabled():
     total_ms = (time.perf_counter() - start) * 1000
     print(
-      "timing:search path=es "
+      f"timing:search path={source_mode} "
       f"embed_ms={embed_ms:.2f} es_ms={es_ms:.2f} total_ms={total_ms:.2f}"
     )
 

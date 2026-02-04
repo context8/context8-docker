@@ -4,9 +4,6 @@
 -- Enable citext extension for case-insensitive text
 CREATE EXTENSION IF NOT EXISTS citext;
 
--- Enable pgvector extension for vector similarity search
-CREATE EXTENSION IF NOT EXISTS vector;
-
 -- Log successful initialization
 DO $$
 BEGIN

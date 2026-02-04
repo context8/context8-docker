@@ -7,47 +7,16 @@ import httpx
 from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
-from app.models import Solution, EMBEDDING_DIM
+from app.embeddings import embed_text
+from app.es import ES_INDEX, ES_URL, build_es_mapping
+from app.models import Solution
 
 
-ES_URL = os.environ.get("ES_URL") or os.environ.get("ELASTICSEARCH_URL") or "http://localhost:9200"
-ES_INDEX = os.environ.get("ES_INDEX", "solutions")
 BATCH_SIZE = int(os.environ.get("ES_REINDEX_BATCH", "200"))
+INCLUDE_EMBEDDING = float(os.environ.get("ES_KNN_WEIGHT", "0")) > 0
 
 
-def _build_mapping() -> dict[str, Any]:
-    return {
-        "mappings": {
-            "properties": {
-                "id": {"type": "keyword"},
-                "user_id": {"type": "keyword"},
-                "api_key_id": {"type": "keyword"},
-                "title": {"type": "text"},
-                "error_message": {"type": "text"},
-                "error_type": {"type": "keyword"},
-                "context": {"type": "text"},
-                "root_cause": {"type": "text"},
-                "solution": {"type": "text"},
-                "code_changes": {"type": "object", "enabled": False},
-                "tags": {"type": "keyword"},
-                "conversation_language": {"type": "keyword"},
-                "programming_language": {"type": "keyword"},
-                "project_path": {"type": "keyword"},
-                "environment": {"type": "object", "enabled": False},
-                "visibility": {"type": "keyword"},
-                "created_at": {"type": "date"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": EMBEDDING_DIM,
-                    "index": True,
-                    "similarity": "l2_norm",
-                },
-            }
-        }
-    }
-
-
-def _serialize_solution(sol: Solution) -> dict[str, Any]:
+async def _serialize_solution(sol: Solution, include_embedding: bool) -> dict[str, Any]:
     doc = {
         "id": sol.id,
         "user_id": str(sol.user_id) if sol.user_id else None,
@@ -62,13 +31,26 @@ def _serialize_solution(sol: Solution) -> dict[str, Any]:
         "tags": sol.tags or [],
         "conversation_language": sol.conversation_language,
         "programming_language": sol.programming_language,
+        "vibecoding_software": sol.vibecoding_software,
         "project_path": sol.project_path,
         "environment": sol.environment,
         "visibility": sol.visibility,
         "created_at": sol.created_at.isoformat() if sol.created_at else None,
+        "upvotes": int(sol.upvotes or 0),
+        "downvotes": int(sol.downvotes or 0),
     }
-    if sol.embedding is not None:
-        doc["embedding"] = [float(x) for x in sol.embedding]
+    if include_embedding:
+        payload = {
+            "title": sol.title,
+            "errorMessage": sol.error_message,
+            "errorType": sol.error_type,
+            "context": sol.context,
+            "rootCause": sol.root_cause,
+            "solution": sol.solution,
+            "tags": sol.tags or [],
+            "environment": sol.environment,
+        }
+        doc["embedding"] = await embed_text(payload)
     return doc
 
 
@@ -83,11 +65,13 @@ def _bulk_payload(docs: Iterable[dict[str, Any]]) -> str:
 
 async def _recreate_index(client: httpx.AsyncClient) -> None:
     await client.delete(f"{ES_URL}/{ES_INDEX}")
-    resp = await client.put(f"{ES_URL}/{ES_INDEX}", json=_build_mapping())
+    resp = await client.put(f"{ES_URL}/{ES_INDEX}", json=build_es_mapping(INCLUDE_EMBEDDING))
     resp.raise_for_status()
 
 
 async def _reindex() -> None:
+    if not ES_URL:
+        raise RuntimeError("ES_URL is not set")
     async with httpx.AsyncClient(timeout=30) as client:
         await _recreate_index(client)
 
@@ -101,8 +85,7 @@ async def _reindex() -> None:
                 rows = result.scalars().all()
                 if not rows:
                     break
-
-                docs = [_serialize_solution(row) for row in rows]
+                docs = [await _serialize_solution(row, INCLUDE_EMBEDDING) for row in rows]
                 payload = _bulk_payload(docs)
                 resp = await client.post(
                     f"{ES_URL}/_bulk",

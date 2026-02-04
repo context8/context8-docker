@@ -21,7 +21,6 @@ class SolutionBase(BaseModel):
     visibility: Optional[Visibility] = None
     projectPath: Optional[str] = None
     environment: Optional[Any] = None
-    embedding: Optional[list[float]] = None
 
     class Config:
         populate_by_name = True
@@ -97,6 +96,7 @@ class SearchRequest(BaseModel):
     limit: int = 25
     offset: int = 0
     visibility: Optional[Visibility] = None
+    source: Optional[Literal["local", "remote", "all"]] = None
 
 
 class SearchResult(BaseModel):
@@ -104,7 +104,7 @@ class SearchResult(BaseModel):
     title: str
     errorType: str
     tags: List[str]
-    createdAt: datetime
+    createdAt: Optional[datetime] = None
     preview: str
     errorMessage: Optional[str] = None
     solution: Optional[str] = None
@@ -114,6 +114,7 @@ class SearchResult(BaseModel):
     upvotes: Optional[int] = None
     downvotes: Optional[int] = None
     voteScore: Optional[int] = None
+    source: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
