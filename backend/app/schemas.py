@@ -124,30 +124,6 @@ class SearchResponse(BaseModel):
 class CountResponse(BaseModel):
     total: int
 
-
-class ChatRequest(BaseModel):
-    prompt: str = Field(..., min_length=1)
-    limit: int = 5
-
-
-class ChatResponse(BaseModel):
-    reply: str
-    hits: List[SearchResult]
-    toolTrace: List[str]
-
-
-class OpenAIChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class OpenAIChatRequest(BaseModel):
-    model: Optional[str] = None
-    messages: List[OpenAIChatMessage]
-    stream: Optional[bool] = False
-    temperature: Optional[float] = None
-
-
 class VoteRequest(BaseModel):
     value: int
 

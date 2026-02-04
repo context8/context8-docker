@@ -4,7 +4,7 @@ export interface ApiKey {
   createdAt?: string;
 }
 
-export type View = 'home' | 'dashboard' | 'demo' | 'login';
+export type View = 'home' | 'dashboard' | 'login';
 export type ThemeMode = 'light' | 'dark';
 export type Visibility = 'private' | 'team';
 

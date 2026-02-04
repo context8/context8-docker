@@ -74,10 +74,6 @@ services:
       ES_BM25_WEIGHT: ${ES_BM25_WEIGHT:-1}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
       EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
-      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      OPENROUTER_TITLE: ${OPENROUTER_TITLE:-Context8}
     command: >
       /bin/sh -c "alembic upgrade head && python local_server.py --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"
     ports:

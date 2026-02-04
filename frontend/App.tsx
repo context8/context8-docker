@@ -3,7 +3,6 @@ import { Layout } from './components/Layout';
 import { Home } from './pages/Home';
 import { DashboardContainer } from './pages/Dashboard/DashboardContainer';
 import { Login } from './pages/Login';
-import { DemoChat } from './pages/DemoChat';
 import { ThemeMode, View } from './types';
 import { setUnauthorizedHandler } from './services/api/client';
 
@@ -91,7 +90,6 @@ const App: React.FC = () => {
       onLogout={session ? handleLogout : undefined}
       theme={theme}
       onToggleTheme={handleToggleTheme}
-      hideChrome={currentView === 'demo'}
     >
       {currentView === 'home' && <Home onViewChange={setCurrentView} theme={theme} />}
       {currentView === 'login' && (
@@ -100,7 +98,6 @@ const App: React.FC = () => {
       {currentView === 'dashboard' && (
         <DashboardContainer sessionState={sessionValue} theme={theme} />
       )}
-      {currentView === 'demo' && <DemoChat sessionState={sessionValue} theme={theme} onViewChange={setCurrentView} onToggleTheme={handleToggleTheme} />}
     </Layout>
   );
 };

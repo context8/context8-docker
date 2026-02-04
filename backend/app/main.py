@@ -1,16 +1,13 @@
 import asyncio
 import json
 import os
-import re
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List
 from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
-import httpx
 from .database import Base, engine, get_session
 from .schemas import (
   SolutionCreate,
@@ -21,9 +18,6 @@ from .schemas import (
   SearchResponse,
   SearchResult,
   CountResponse,
-  ChatRequest,
-  ChatResponse,
-  OpenAIChatRequest,
   SolutionVisibilityUpdate,
   SolutionVisibilityOut,
   VoteRequest,
@@ -51,7 +45,7 @@ from .embeddings import embed_text
 from .api_keys import router as apikey_router, resolve_api_keys, list_active_api_keys, ApiKey
 from .users import User
 from jose import jwt
-from .config import JWT_SECRET, JWT_ALG, OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL, OPENROUTER_TITLE, EMAIL_VERIFICATION_ENABLED
+from .config import JWT_SECRET, JWT_ALG, EMAIL_VERIFICATION_ENABLED
 from .visibility import VISIBILITY_PRIVATE, normalize_visibility
 from .auth import (
     send_code,
@@ -92,36 +86,8 @@ app.add_middleware(
   allow_headers=["*"],
 )
 
-SYSTEM_PROMPT = (
-  "You are the Context8 Demo assistant.\\n"
-  "Behavior:\\n"
-  "- When a user reports a bug, error, crash, or exception, you MUST use the searchSolutions tool before answering.\\n"
-  "- Use the tool results to ground your response. If no results, say so and ask a targeted follow-up.\\n"
-  "- Keep answers concise and actionable.\\n"
-  "- Never fabricate solutions that are not in the tool results."
-)
-
 SEARCH_ES_TIMEOUT = float(os.environ.get("SEARCH_ES_TIMEOUT", "3"))
 SEARCH_EMBED_TIMEOUT = float(os.environ.get("SEARCH_EMBED_TIMEOUT", "4"))
-
-TOOL_DEF = {
-  "type": "function",
-  "function": {
-    "name": "searchSolutions",
-    "description": "Search Context8 solutions database for relevant bug fixes.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {"type": "string", "description": "User bug description or error message."},
-        "limit": {"type": "integer", "description": "Max number of results", "default": 5},
-      },
-      "required": ["query"],
-    },
-  },
-}
-
-def _needs_search(prompt: str) -> bool:
-  return bool(re.search(r"\\b(error|bug|crash|exception|traceback|stack trace|failed|failure|issue)\\b", prompt, re.I))
 
 def _knn_enabled() -> bool:
   try:
@@ -204,65 +170,6 @@ async def _search_es(
   if not resp:
     raise HTTPException(status_code=503, detail="Elasticsearch is not configured (ES_URL missing)")
   return resp
-
-async def _search_for_user(
-  db: AsyncSession,
-  api_key_ids: list[str],
-  allow_team: bool,
-  allow_admin: bool,
-  query: str,
-  limit: int,
-  visibility: str | None = None,
-) -> SearchResponse:
-  vector = None
-  knn_enabled = _knn_enabled()
-  if knn_enabled:
-    vector = await _embed_query(query)
-
-  es_resp = await _search_es(
-    query,
-    api_key_ids,
-    allow_team,
-    allow_admin,
-    max(limit, 0),
-    0,
-    vector if knn_enabled else None,
-    visibility,
-  )
-
-  hits = es_resp.get("hits", {}).get("hits", [])
-  results: list[SearchResult] = []
-  for hit in hits:
-    source = hit.get("_source", {})
-    preview_msg = source.get("error_message", "") or ""
-    preview_ctx = source.get("context", "") or ""
-    results.append(
-      SearchResult(
-        id=source.get("id") or hit.get("_id"),
-        title=source.get("title", ""),
-        errorType=source.get("error_type", ""),
-        tags=_normalize_es_tags(source.get("tags")),
-        createdAt=source.get("created_at"),
-        preview=f"{preview_msg[:80]}{'...' if len(preview_msg) > 80 else ''} | {preview_ctx[:50]}",
-        errorMessage=source.get("error_message"),
-        solution=source.get("solution"),
-        visibility=source.get("visibility"),
-        apiKeyId=source.get("api_key_id"),
-        vibecodingSoftware=source.get("vibecoding_software"),
-        upvotes=source.get("upvotes"),
-        downvotes=source.get("downvotes"),
-        voteScore=(source.get("upvotes") or 0) - (source.get("downvotes") or 0),
-      )
-    )
-
-  total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
-
-  if results:
-    if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
-      print(f"search:es_hit results={len(results)}")
-
-  return SearchResponse(total=total, results=results)
-
 
 def _split_api_keys(x_api_key: str | None, x_api_keys: str | None) -> list[str]:
   raw_keys: list[str] = []
@@ -993,182 +900,3 @@ async def search(
     )
 
   return SearchResponse(total=total, results=results)
-
-
-@app.post("/llm/chat", response_model=ChatResponse)
-async def llm_chat(
-  payload: ChatRequest,
-  db: AsyncSession = Depends(get_session),
-  scope: dict = Depends(require_solution_read_scope),
-):
-  if not OPENROUTER_API_KEY:
-    raise HTTPException(status_code=500, detail="OpenRouter API key not configured")
-
-  messages = [
-    {"role": "system", "content": SYSTEM_PROMPT},
-    {"role": "user", "content": payload.prompt},
-  ]
-  tool_choice = {"type": "function", "function": {"name": "searchSolutions"}} if _needs_search(payload.prompt) else "auto"
-
-  try:
-    async with httpx.AsyncClient(timeout=30) as client:
-      response = await client.post(
-        f"{OPENROUTER_BASE_URL}/chat/completions",
-        headers={
-          "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-          "Content-Type": "application/json",
-          "X-Title": OPENROUTER_TITLE,
-        },
-        json={
-          "model": OPENROUTER_MODEL,
-          "messages": messages,
-          "tools": [TOOL_DEF],
-          "tool_choice": tool_choice,
-          "temperature": 0.2,
-        },
-      )
-
-    if response.status_code >= 400:
-      print(f"OpenRouter API error: {response.status_code} {response.text}")
-      raise HTTPException(status_code=502, detail=response.text)
-  except Exception as e:
-    print(f"Error calling OpenRouter: {e}")
-    raise
-
-  data = response.json()
-  message = (data.get("choices") or [{}])[0].get("message") or {}
-  tool_calls = message.get("tool_calls") or []
-  first_content = message.get("content") or ""
-
-  tool_trace: list[str] = []
-  hits: list[SearchResult] = []
-
-  if tool_calls:
-    tool_messages = []
-    for call in tool_calls:
-      if call.get("function", {}).get("name") != "searchSolutions":
-        continue
-      raw_args = call.get("function", {}).get("arguments", "{}")
-      try:
-        args = json.loads(raw_args)
-      except Exception:
-        args = {}
-      query = args.get("query") or payload.prompt
-      limit = args.get("limit") if isinstance(args.get("limit"), int) else payload.limit
-
-      search_response = await _search_for_user(
-        db,
-        scope["api_key_ids"],
-        scope["allow_team"],
-        scope.get("allow_admin", False),
-        query,
-        limit,
-      )
-      hits = search_response.results
-      tool_trace.append(f"searchSolutions(\"{query}\") => {search_response.total} results")
-
-      tool_payload = search_response.model_dump(mode='json') if hasattr(search_response, "model_dump") else search_response.dict()
-      tool_messages.append({
-        "role": "tool",
-        "tool_call_id": call.get("id"),
-        "content": json.dumps(tool_payload),
-      })
-
-    messages.append({
-      "role": "assistant",
-      "content": first_content,
-      "tool_calls": tool_calls,
-    })
-    messages.extend(tool_messages)
-
-    try:
-      async with httpx.AsyncClient(timeout=30) as client:
-        followup = await client.post(
-          f"{OPENROUTER_BASE_URL}/chat/completions",
-          headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "X-Title": OPENROUTER_TITLE,
-          },
-          json={
-            "model": OPENROUTER_MODEL,
-            "messages": messages,
-            "tool_choice": "none",
-            "temperature": 0.2,
-          },
-        )
-
-      if followup.status_code >= 400:
-        print(f"OpenRouter followup API error: {followup.status_code} {followup.text}")
-        raise HTTPException(status_code=502, detail=followup.text)
-    except Exception as e:
-      print(f"Error in followup OpenRouter call: {e}")
-      raise
-
-    followup_data = followup.json()
-    reply = (followup_data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-    return ChatResponse(reply=reply, hits=hits, toolTrace=tool_trace)
-
-  if _needs_search(payload.prompt):
-    search_response = await _search_for_user(
-      db,
-      scope["api_key_ids"],
-      scope["allow_team"],
-      scope.get("allow_admin", False),
-      payload.prompt,
-      payload.limit,
-    )
-    hits = search_response.results
-    tool_trace.append(f"searchSolutions(\"{payload.prompt}\") => {search_response.total} results")
-
-  return ChatResponse(reply=first_content or "No response generated.", hits=hits, toolTrace=tool_trace)
-
-
-@app.post("/v1/chat/completions")
-async def openai_chat_completions(
-  payload: OpenAIChatRequest,
-  db: AsyncSession = Depends(get_session),
-  scope: dict = Depends(require_solution_read_scope),
-):
-  if not scope["user_id"]:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-  if not payload.messages:
-    raise HTTPException(status_code=422, detail="messages must not be empty")
-
-  user_message = next((m.content for m in reversed(payload.messages) if m.role == "user"), None)
-  if not user_message:
-    raise HTTPException(status_code=422, detail="no user message provided")
-
-  chat_response = await llm_chat(ChatRequest(prompt=user_message, limit=5), db, scope)
-  return {
-    "id": f"chatcmpl_{uuid.uuid4().hex}",
-    "object": "chat.completion",
-    "created": int(time.time()),
-    "model": OPENROUTER_MODEL,
-    "choices": [
-      {
-        "index": 0,
-        "message": {"role": "assistant", "content": chat_response.reply},
-        "finish_reason": "stop",
-      }
-    ],
-  }
-
-
-@app.get("/v1/models")
-async def openai_list_models(
-  scope: dict = Depends(require_solution_read_scope),
-):
-  if not scope["user_id"]:
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-  return {
-    "object": "list",
-    "data": [
-      {
-        "id": OPENROUTER_MODEL,
-        "object": "model",
-        "created": int(time.time()),
-        "owned_by": "openrouter",
-      }
-    ],
-  }
