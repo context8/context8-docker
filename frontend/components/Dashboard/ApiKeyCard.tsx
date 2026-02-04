@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Copy, Trash2, Key, Check } from 'lucide-react';
+import { Copy, Trash2, Key, Check, SlidersHorizontal } from 'lucide-react';
 import { ApiKey } from '../../types';
 import { Button } from '../Common/Button';
 
 export interface ApiKeyCardProps {
   apiKey: ApiKey;
   onRequestDelete: (id: string) => void;
+  onEditLimits?: (id: string) => void;
   onCopy?: () => void;
   theme: 'light' | 'dark';
   solutionCount?: number;
@@ -14,11 +15,14 @@ export interface ApiKeyCardProps {
 export const ApiKeyCard: React.FC<ApiKeyCardProps> = ({
   apiKey,
   onRequestDelete,
+  onEditLimits,
   onCopy,
   theme,
   solutionCount = 0,
 }) => {
   const [copied, setCopied] = useState(false);
+  const dailyLabel = apiKey.dailyLimit == null ? 'Unlimited' : apiKey.dailyLimit.toLocaleString();
+  const monthlyLabel = apiKey.monthlyLimit == null ? 'Unlimited' : apiKey.monthlyLimit.toLocaleString();
 
   const handleCopy = () => {
     navigator.clipboard.writeText(apiKey.id);
@@ -61,6 +65,19 @@ export const ApiKeyCard: React.FC<ApiKeyCardProps> = ({
         API key values are shown only once at creation.
       </p>
 
+      <div className={`mb-3 rounded-md border px-3 py-2 text-xs ${
+        theme === 'dark' ? 'border-slate-700 text-slate-300 bg-slate-900/60' : 'border-gray-200 text-gray-600 bg-gray-50'
+      }`}>
+        <div className="flex items-center justify-between">
+          <span>Daily limit</span>
+          <span className="font-medium">{dailyLabel}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          <span>Monthly limit</span>
+          <span className="font-medium">{monthlyLabel}</span>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <Button
           variant="secondary"
@@ -70,6 +87,16 @@ export const ApiKeyCard: React.FC<ApiKeyCardProps> = ({
           {copied ? <Check size={14} /> : <Copy size={14} />}
           <span className="ml-1">{copied ? 'Copied ID!' : 'Copy ID'}</span>
         </Button>
+        {onEditLimits && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onEditLimits(apiKey.id)}
+          >
+            <SlidersHorizontal size={14} />
+            <span className="ml-1">Edit limits</span>
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"

@@ -2,6 +2,11 @@ import { useState, useCallback, useEffect } from 'react';
 import { apiKeysService } from '../services/api/apiKeys';
 import { ApiKey } from '../types';
 
+export interface ApiKeyLimitsInput {
+  dailyLimit?: number | null;
+  monthlyLimit?: number | null;
+}
+
 export function useApiKeys(token: string | null) {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -26,12 +31,16 @@ export function useApiKeys(token: string | null) {
     }
   }, [token]);
 
-  const createApiKey = useCallback(async (name: string) => {
+  const createApiKey = useCallback(async (name: string, limits?: ApiKeyLimitsInput) => {
     if (!token) throw new Error('No token');
     setIsLoading(true);
     setError(null);
     try {
-      const result = await apiKeysService.create(token, name);
+      const result = await apiKeysService.create(token, {
+        name,
+        dailyLimit: limits?.dailyLimit ?? null,
+        monthlyLimit: limits?.monthlyLimit ?? null,
+      });
       await fetchApiKeys();
       return result;
     } catch (err) {
@@ -59,6 +68,25 @@ export function useApiKeys(token: string | null) {
     }
   }, [token, fetchApiKeys]);
 
+  const updateApiKeyLimits = useCallback(async (keyId: string, limits: ApiKeyLimitsInput) => {
+    if (!token) throw new Error('No token');
+    setIsLoading(true);
+    setError(null);
+    try {
+      await apiKeysService.updateLimits(token, keyId, {
+        dailyLimit: limits.dailyLimit ?? null,
+        monthlyLimit: limits.monthlyLimit ?? null,
+      });
+      await fetchApiKeys();
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to update API key limits';
+      setError(errorMsg);
+      throw new Error(errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [token, fetchApiKeys]);
+
   useEffect(() => {
     fetchApiKeys();
   }, [fetchApiKeys]);
@@ -69,6 +97,7 @@ export function useApiKeys(token: string | null) {
     error,
     createApiKey,
     deleteApiKey,
+    updateApiKeyLimits,
     refetch: fetchApiKeys,
   };
 }

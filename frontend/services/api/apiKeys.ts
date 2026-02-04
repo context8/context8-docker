@@ -6,10 +6,16 @@ export const apiKeysService = {
     return request<ApiKey[]>('/apikeys', { method: 'GET' }, { token });
   },
 
-  async create(token: string, name: string): Promise<{ id: string; apiKey: string }> {
+  async create(
+    token: string,
+    payload: { name: string; dailyLimit?: number | null; monthlyLimit?: number | null }
+  ): Promise<{ id: string; apiKey: string; dailyLimit?: number | null; monthlyLimit?: number | null }> {
     return request(
-      `/apikeys?name=${encodeURIComponent(name)}`,
-      { method: 'POST' },
+      `/apikeys`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
       { token }
     );
   },
@@ -18,6 +24,21 @@ export const apiKeysService = {
     return request(
       `/apikeys/${keyId}`,
       { method: 'DELETE' },
+      { token }
+    );
+  },
+
+  async updateLimits(
+    token: string,
+    keyId: string,
+    payload: { dailyLimit?: number | null; monthlyLimit?: number | null }
+  ): Promise<ApiKey> {
+    return request(
+      `/apikeys/${keyId}/limits`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      },
       { token }
     );
   },

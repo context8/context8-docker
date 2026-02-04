@@ -19,23 +19,43 @@ export const ApiKeysView: React.FC<ApiKeysViewProps> = ({
   theme,
   solutionCounts = {},
 }) => {
-  const { apiKeys, isLoading, createApiKey, deleteApiKey } = useApiKeys(token);
+  const { apiKeys, isLoading, createApiKey, deleteApiKey, updateApiKeyLimits } = useApiKeys(token);
   const { toasts, success, error, dismiss } = useToast();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [createdKeyValue, setCreatedKeyValue] = useState<string | null>(null);
   const [newKeyName, setNewKeyName] = useState('');
+  const [newDailyLimit, setNewDailyLimit] = useState('');
+  const [newMonthlyLimit, setNewMonthlyLimit] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [deleteKeyId, setDeleteKeyId] = useState<string | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [editKeyId, setEditKeyId] = useState<string | null>(null);
+  const [editDailyLimit, setEditDailyLimit] = useState('');
+  const [editMonthlyLimit, setEditMonthlyLimit] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const deleteTarget = useMemo(
     () => apiKeys.find((key) => key.id === deleteKeyId) || null,
     [apiKeys, deleteKeyId],
   );
+  const editTarget = useMemo(
+    () => apiKeys.find((key) => key.id === editKeyId) || null,
+    [apiKeys, editKeyId],
+  );
   const deletePrompt = deleteTarget ? `I CONFIRM DELETE ${deleteTarget.name}` : '';
   const isDeleteConfirmValid = deleteConfirmText.trim() === deletePrompt;
+
+  const parseLimit = (value: string, label: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (!/^[0-9]+$/.test(trimmed)) {
+      error(`${label} must be a non-negative integer`);
+      return undefined;
+    }
+    return Number(trimmed);
+  };
 
   const handleCreate = async () => {
     if (!newKeyName.trim()) {
@@ -43,12 +63,19 @@ export const ApiKeysView: React.FC<ApiKeysViewProps> = ({
       return;
     }
 
+    const dailyLimit = parseLimit(newDailyLimit, 'Daily limit');
+    if (dailyLimit === undefined) return;
+    const monthlyLimit = parseLimit(newMonthlyLimit, 'Monthly limit');
+    if (monthlyLimit === undefined) return;
+
     setIsCreating(true);
     try {
-      const created = await createApiKey(newKeyName.trim());
+      const created = await createApiKey(newKeyName.trim(), { dailyLimit, monthlyLimit });
       success('API key created successfully!');
       setShowCreateModal(false);
       setNewKeyName('');
+      setNewDailyLimit('');
+      setNewMonthlyLimit('');
       setCreatedKeyValue(created.apiKey);
       setShowKeyModal(true);
     } catch (err) {
@@ -61,6 +88,33 @@ export const ApiKeysView: React.FC<ApiKeysViewProps> = ({
   const handleDeleteRequest = (id: string) => {
     setDeleteKeyId(id);
     setDeleteConfirmText('');
+  };
+
+  const handleEditRequest = (id: string) => {
+    const target = apiKeys.find((key) => key.id === id);
+    if (!target) return;
+    setEditKeyId(id);
+    setEditDailyLimit(target.dailyLimit == null ? '' : String(target.dailyLimit));
+    setEditMonthlyLimit(target.monthlyLimit == null ? '' : String(target.monthlyLimit));
+  };
+
+  const handleEditConfirm = async () => {
+    if (!editTarget) return;
+    const dailyLimit = parseLimit(editDailyLimit, 'Daily limit');
+    if (dailyLimit === undefined) return;
+    const monthlyLimit = parseLimit(editMonthlyLimit, 'Monthly limit');
+    if (monthlyLimit === undefined) return;
+
+    setIsUpdating(true);
+    try {
+      await updateApiKeyLimits(editTarget.id, { dailyLimit, monthlyLimit });
+      success('API key limits updated');
+      setEditKeyId(null);
+    } catch (err) {
+      error(err instanceof Error ? err.message : 'Failed to update API key limits');
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -141,6 +195,7 @@ export const ApiKeysView: React.FC<ApiKeysViewProps> = ({
               key={apiKey.id}
               apiKey={apiKey}
               onRequestDelete={handleDeleteRequest}
+              onEditLimits={handleEditRequest}
               onCopy={() => success('API Key ID copied to clipboard')}
               theme={theme}
               solutionCount={solutionCounts[apiKey.id]}
@@ -169,6 +224,40 @@ export const ApiKeysView: React.FC<ApiKeysViewProps> = ({
               className={inputClass}
               disabled={isCreating}
             />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                theme === 'dark' ? 'text-slate-200' : 'text-gray-700'
+              }`}>
+                Daily limit (optional)
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={newDailyLimit}
+                onChange={(e) => setNewDailyLimit(e.target.value)}
+                placeholder="Leave empty for unlimited"
+                className={inputClass}
+                disabled={isCreating}
+              />
+            </div>
+            <div>
+              <label className={`block text-sm font-medium mb-1 ${
+                theme === 'dark' ? 'text-slate-200' : 'text-gray-700'
+              }`}>
+                Monthly limit (optional)
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={newMonthlyLimit}
+                onChange={(e) => setNewMonthlyLimit(e.target.value)}
+                placeholder="Leave empty for unlimited"
+                className={inputClass}
+                disabled={isCreating}
+              />
+            </div>
           </div>
           <div className="flex gap-3 pt-4">
             <Button
@@ -225,6 +314,71 @@ export const ApiKeysView: React.FC<ApiKeysViewProps> = ({
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(editTarget)}
+        onClose={() => !isUpdating && setEditKeyId(null)}
+        title="Edit API Key Limits"
+      >
+        {editTarget && (
+          <div className="space-y-4">
+            <p className={theme === 'dark' ? 'text-slate-300' : 'text-gray-700'}>
+              Update limits for <span className="font-medium">{editTarget.name}</span>.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${
+                  theme === 'dark' ? 'text-slate-200' : 'text-gray-700'
+                }`}>
+                  Daily limit (optional)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={editDailyLimit}
+                  onChange={(e) => setEditDailyLimit(e.target.value)}
+                  placeholder="Leave empty for unlimited"
+                  className={inputClass}
+                  disabled={isUpdating}
+                />
+              </div>
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${
+                  theme === 'dark' ? 'text-slate-200' : 'text-gray-700'
+                }`}>
+                  Monthly limit (optional)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={editMonthlyLimit}
+                  onChange={(e) => setEditMonthlyLimit(e.target.value)}
+                  placeholder="Leave empty for unlimited"
+                  className={inputClass}
+                  disabled={isUpdating}
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button
+                variant="primary"
+                onClick={handleEditConfirm}
+                isLoading={isUpdating}
+                disabled={isUpdating}
+              >
+                Save
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setEditKeyId(null)}
+                disabled={isUpdating}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal

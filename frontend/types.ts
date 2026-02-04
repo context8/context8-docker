@@ -2,6 +2,8 @@ export interface ApiKey {
   id: string;
   name: string;
   createdAt?: string;
+  dailyLimit?: number | null;
+  monthlyLimit?: number | null;
 }
 
 export type View = 'home' | 'dashboard' | 'login';
