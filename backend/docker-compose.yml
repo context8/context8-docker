@@ -44,23 +44,6 @@ services:
       timeout: 10s
       retries: 3
 
-  cleanup:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: context8-cleanup
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
-    command: python local_cleanup.py --schedule --interval 6
-    restart: unless-stopped
-    networks:
-      - context8-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
 volumes:
   postgres_data:
 

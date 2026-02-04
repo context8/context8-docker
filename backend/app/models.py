@@ -1,6 +1,5 @@
 from sqlalchemy import Column, String, Text, DateTime, JSON, Integer, Boolean, CheckConstraint, Index, text
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import CITEXT
 from pgvector.sqlalchemy import Vector
 from .database import Base
 from .visibility import VISIBILITY_PRIVATE
@@ -62,42 +61,4 @@ class SolutionVote(Base):
         Index("ix_solution_votes_solution_user", "solution_id", "user_id", unique=True),
         Index("ix_solution_votes_solution_id", "solution_id"),
         Index("ix_solution_votes_user_id", "user_id"),
-    )
-
-
-class VerificationCode(Base):
-    __tablename__ = "verification_codes"
-
-    id = Column(String, primary_key=True)
-    email = Column(CITEXT, nullable=False, index=True)
-    code_hash = Column(String(64), nullable=False)
-    salt = Column(String(32), nullable=False)
-    verified = Column(Boolean, nullable=False, default=False)
-    failed_attempts = Column(Integer, nullable=False, default=0)
-    locked_until = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    expires_at = Column(DateTime(timezone=True), nullable=False)
-    ip_address = Column(String, nullable=True)
-
-    __table_args__ = (
-        CheckConstraint("code_hash ~ '^[a-f0-9]{64}$'", name='code_hash_format'),
-        Index('ix_verification_codes_email_verified', 'email', 'verified'),
-        Index('ix_verification_codes_created_at', 'created_at'),
-    )
-
-
-class AuthAuditLog(Base):
-    __tablename__ = "auth_audit_log"
-
-    id = Column(String, primary_key=True)
-    email = Column(CITEXT, nullable=False, index=True)
-    event_type = Column(String, nullable=False)  # 'code_sent', 'verify_success', 'verify_failed', 'locked'
-    ip_address = Column(String, nullable=True)
-    user_agent = Column(String, nullable=True)
-    success = Column(Boolean, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    __table_args__ = (
-        Index('ix_auth_audit_log_email_created_at', 'email', 'created_at'),
-        Index('ix_auth_audit_log_event_type', 'event_type'),
     )

@@ -45,13 +45,9 @@ from .embeddings import embed_text
 from .api_keys import router as apikey_router, resolve_api_keys, list_active_api_keys, ApiKey
 from .users import User
 from jose import jwt
-from .config import JWT_SECRET, JWT_ALG, EMAIL_VERIFICATION_ENABLED
+from .config import JWT_SECRET, JWT_ALG
 from .visibility import VISIBILITY_PRIVATE, normalize_visibility
 from .auth import (
-    send_code,
-    verify_code,
-    SendCodeRequest,
-    VerifyCodeRequest,
     SessionResponse,
     UserResponse,
     AdminSetupRequest,
@@ -61,7 +57,7 @@ from .auth import (
     setup_admin,
     login,
 )
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
 app = FastAPI(title="Context8 Cloud API", version="1.0.0")
 
@@ -178,49 +174,6 @@ def _split_api_keys(x_api_key: str | None, x_api_keys: str | None) -> list[str]:
   if x_api_keys:
     raw_keys.extend([item.strip() for item in x_api_keys.split(",") if item.strip()])
   return raw_keys
-
-
-async def require_verified_user(
-  authorization: str | None = Header(default=None),
-  x_api_key: str | None = Header(default=None),
-  db: AsyncSession = Depends(get_session),
-) -> str:
-  """Require an authenticated, email-verified user."""
-  user_id = None
-
-  if authorization and authorization.startswith("Bearer "):
-    token = authorization.split(" ", 1)[1]
-    try:
-      data = jwt.decode(
-        token,
-        JWT_SECRET,
-        algorithms=[JWT_ALG],
-        audience="context8-api",
-        issuer="context8.com",
-      )
-      user_id = data.get("sub")
-    except Exception:
-      print("[auth] bearer decode failed")
-      key_items = await resolve_api_keys(db, [token])
-      if key_items:
-        user_id = str(key_items[0].user_id)
-      else:
-        print("[auth] bearer api key not resolved")
-
-  if not user_id and x_api_key:
-    key_items = await resolve_api_keys(db, [x_api_key])
-    if key_items:
-      user_id = str(key_items[0].user_id)
-    else:
-      print("[auth] api key not resolved")
-
-  if not user_id:
-    print(f"[auth] unauthorized headers auth={authorization} x-api-key-present={bool(x_api_key)}")
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-  await ensure_user(db, user_id)
-  return user_id
-
 
 async def require_solution_read_scope(
   authorization: str | None = Header(default=None),
@@ -367,51 +320,8 @@ async def login_account(
   return await login(payload, db)
 
 
-# Create new auth router for email verification
-email_auth_router = APIRouter(prefix="/auth/email", tags=["email-auth"])
-
-@email_auth_router.post("/send-code")
-async def send_verification_code(
-    request: SendCodeRequest,
-    req: Request,
-    db: AsyncSession = Depends(get_session)
-):
-    """Send verification code to email."""
-    return await send_code(request, req, db)
-
-@email_auth_router.post("/verify-code", response_model=SessionResponse)
-async def verify_verification_code(
-    request: VerifyCodeRequest,
-    req: Request,
-    db: AsyncSession = Depends(get_session)
-):
-    """Verify code and get session token."""
-    return await verify_code(request, req, db)
-
-@email_auth_router.get("/me", response_model=UserResponse)
-async def get_current_user_info(
-    user_id: str = Depends(require_verified_user),
-    db: AsyncSession = Depends(get_session)
-):
-    """Get current user information."""
-    try:
-        user_uuid = uuid.UUID(str(user_id))
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-    result = await db.execute(select(User).where(User.id == user_uuid))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return UserResponse(
-        id=str(user.id),
-        email=user.email,
-        emailVerified=user.email_verified
-    )
-
 app.include_router(apikey_router)
 app.include_router(auth_router)
-app.include_router(email_auth_router)
 
 @app.on_event("startup")
 async def on_startup():

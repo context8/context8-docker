@@ -11,7 +11,6 @@ from .auth import require_admin_user
 from .users import User
 from .models import Solution, SolutionVote
 from .es import delete_solution_es
-from .config import EMAIL_VERIFICATION_ENABLED
 
 
 class ApiKey(Base):
@@ -114,9 +113,6 @@ async def resolve_api_keys(db: AsyncSession, raw_keys: list[str]) -> list[ApiKey
         user = user_res.scalar_one_or_none()
         if not user:
             print(f"[auth] user missing for key user_id={user_id}")
-            continue
-        if EMAIL_VERIFICATION_ENABLED and not user.email_verified:
-            print(f"[auth] user not verified email={user.email}")
             continue
         valid_users[str(user_uuid)] = user
 

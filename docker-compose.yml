@@ -66,14 +66,11 @@ services:
       DATABASE_SSL: ${DATABASE_SSL:-false}
       JWT_SECRET: ${JWT_SECRET:-replace_me}
       API_KEY_SECRET: ${API_KEY_SECRET:-replace_me}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM: ${RESEND_FROM:-noreply@context8.com}
       ES_URL: ${ES_URL:-http://elasticsearch:9200}
       ES_INDEX: ${ES_INDEX:-solutions}
       ES_KNN_WEIGHT: ${ES_KNN_WEIGHT:-0}
       ES_BM25_WEIGHT: ${ES_BM25_WEIGHT:-1}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
-      EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
     command: >
       /bin/sh -c "alembic upgrade head && python local_server.py --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"
     ports:
@@ -86,26 +83,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-  cleanup:
-    build:
-      context: ./backend
-    container_name: ${CONTEXT8_CLEANUP_NAME:-context8-cleanup}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
-      DATABASE_SSL: ${DATABASE_SSL:-false}
-      JWT_SECRET: ${JWT_SECRET:-replace_me}
-      API_KEY_SECRET: ${API_KEY_SECRET:-replace_me}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM: ${RESEND_FROM:-noreply@context8.com}
-      EMAIL_VERIFICATION_ENABLED: ${EMAIL_VERIFICATION_ENABLED:-false}
-    command: python local_cleanup.py --schedule --interval 6
-    restart: unless-stopped
-    networks:
-      - context8-net
 
   frontend:
     build:
