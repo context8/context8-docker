@@ -7,6 +7,7 @@ export interface ApiKey {
 export type View = 'home' | 'dashboard' | 'login';
 export type ThemeMode = 'light' | 'dark';
 export type Visibility = 'private' | 'team';
+export type SearchSource = 'local' | 'remote' | 'all';
 
 export interface SolutionInput {
   title: string;
@@ -60,4 +61,5 @@ export interface SearchResult {
   upvotes?: number;
   downvotes?: number;
   voteScore?: number;
+  source?: SearchSource;
 }

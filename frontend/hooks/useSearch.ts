@@ -2,15 +2,16 @@ import { useState, useCallback } from 'react';
 import { solutionsService } from '../services/api/solutions';
 import { SearchResult } from '../types';
 import { AuthOptions } from '../services/api/client';
+import { SearchOptions } from '../services/api/solutions';
 
-export function useSearch(auth: AuthOptions) {
+export function useSearch(auth: AuthOptions, defaultOptions: SearchOptions = {}) {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [total, setTotal] = useState(0);
 
-  const search = useCallback(async (searchQuery: string) => {
+  const search = useCallback(async (searchQuery: string, options: SearchOptions = {}) => {
     if (!searchQuery.trim()) {
       setResults([]);
       setQuery('');
@@ -22,7 +23,8 @@ export function useSearch(auth: AuthOptions) {
     setQuery(searchQuery);
 
     try {
-      const data = await solutionsService.search(searchQuery, auth);
+      const merged = { ...defaultOptions, ...options };
+      const data = await solutionsService.search(searchQuery, auth, undefined, merged);
       setResults(data.results || []);
       setTotal(data.total || 0);
     } catch (err) {
@@ -32,7 +34,7 @@ export function useSearch(auth: AuthOptions) {
     } finally {
       setIsLoading(false);
     }
-  }, [auth]);
+  }, [auth, defaultOptions]);
 
   const clearSearch = useCallback(() => {
     setResults([]);

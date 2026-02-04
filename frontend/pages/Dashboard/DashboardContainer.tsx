@@ -56,10 +56,10 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
   `;
 
   return (
-    <div className={`min-h-screen ${theme === 'dark' ? 'bg-slate-950' : 'bg-gray-50'}`}>
+    <div className="min-h-screen appdash">
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Tabs */}
-        <div className={`border-b mb-6 ${theme === 'dark' ? 'border-slate-700' : 'border-gray-200'}`}>
+        <div className="border-b border-default mb-6">
           <nav className="flex gap-1 -mb-px">
             {tabs.map((tab) => (
               <button

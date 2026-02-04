@@ -58,6 +58,69 @@
       .scrollbar-hide::-webkit-scrollbar {
         display: none;
       }
+
+      .appdash {
+        background-color: hsl(var(--dash-bg));
+        color: hsl(var(--dash-fg));
+      }
+
+      html:not(.dark) .appdash {
+        --dash-bg: 0 0% 100%;
+        --dash-fg: 0 0% 9%;
+        --dash-fg-muted: 0 0% 44%;
+        --dash-border: 0 0% 87.5%;
+        --dash-border-strong: 0 0% 83%;
+        --dash-surface: 0 0% 99.2%;
+        --dash-surface-2: 0 0% 97%;
+        --dash-brand: 153 60% 53%;
+        --dash-ring: 153 60% 53%;
+      }
+
+      html.dark .appdash {
+        --dash-bg: 0 0% 4%;
+        --dash-fg: 0 0% 98%;
+        --dash-fg-muted: 0 0% 54%;
+        --dash-border: 0 0% 18%;
+        --dash-border-strong: 0 0% 21%;
+        --dash-surface: 0 0% 7%;
+        --dash-surface-2: 0 0% 14%;
+        --dash-brand: 153 60% 53%;
+        --dash-ring: 153 60% 53%;
+      }
+
+      .appdash .bg-surface {
+        background-color: hsl(var(--dash-surface));
+      }
+      .appdash .bg-alternative {
+        background-color: hsl(var(--dash-surface-2));
+      }
+      .appdash .border-default {
+        border-color: hsl(var(--dash-border));
+      }
+      .appdash .text-foreground {
+        color: hsl(var(--dash-fg));
+      }
+      .appdash .text-foreground-light {
+        color: hsl(var(--dash-fg-muted));
+      }
+      .appdash .dash-input {
+        width: 100%;
+        height: 34px;
+        padding: 0 0.75rem;
+        border-radius: 0.5rem;
+        border: 1px solid hsl(var(--dash-border));
+        background: hsl(var(--dash-surface));
+        color: hsl(var(--dash-fg));
+        transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+      }
+      .appdash .dash-input::placeholder {
+        color: hsl(var(--dash-fg-muted));
+      }
+      .appdash .dash-input:focus {
+        outline: none;
+        border-color: hsl(var(--dash-brand) / 0.45);
+        box-shadow: 0 0 0 3px hsl(var(--dash-ring) / 0.22);
+      }
     </style>
   <script type="importmap">
 {

@@ -4,7 +4,7 @@
 
 # Context8 CLI Frontend
 
-Minimal UI for Context8 Cloud: email verification login → create API key → save/search solutions.
+Minimal UI for Context8 Docker: admin login → create API key → save/search solutions.
 
 ## Setup
 1) `npm install`
@@ -20,9 +20,9 @@ npm run dev
 Open `http://localhost:5173` in your browser.
 
 ## Usage
-1) Enter email and click “Send Code”
-2) Enter verification code and click “Verify and Login” (JWT is saved)
-3) Optional: create an API key and use `X-API-Key` for requests
+1) First visit: create the admin account
+2) Login to the dashboard
+3) Create an API key and use `X-API-Key` for requests
 4) Fill required fields in “Save Solution” to write solutions
-5) Use “Search” to query your solutions (vector first, keyword fallback)
-6) “Demo Chat” calls the backend LLM proxy and uses function call to search Context8 solutions
+5) Use “Search” to query your solutions (Elasticsearch only; optional kNN if enabled)
+6) Optional: set Remote base/API key in Search to federate queries against another Context8 server

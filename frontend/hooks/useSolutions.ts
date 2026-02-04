@@ -170,7 +170,7 @@ export function useSolutions(auth: AuthOptions) {
     setIsSearching(true);
     setError(null);
     try {
-      const response = await solutionsService.search(query, auth, controller.signal, visibility);
+      const response = await solutionsService.search(query, auth, controller.signal, { visibility });
       setSearchResults(response.results || []);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {

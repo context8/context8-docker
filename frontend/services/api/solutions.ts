@@ -1,5 +1,5 @@
 import { request, AuthOptions } from './client';
-import type { Solution, SolutionInput, SearchResponse, Visibility } from '@/types';
+import type { Solution, SolutionInput, SearchResponse, Visibility, SearchSource } from '@/types';
 
 export interface SolutionCreate extends SolutionInput {
   visibility?: Visibility;
@@ -29,6 +29,13 @@ export interface ListOptions {
   limit?: number;
   offset?: number;
   visibility?: Visibility;
+}
+
+export interface SearchOptions {
+  visibility?: Visibility;
+  source?: SearchSource;
+  remoteBase?: string;
+  remoteApiKey?: string;
 }
 
 export const solutionsService = {
@@ -112,17 +119,25 @@ export const solutionsService = {
     query: string,
     auth: AuthOptions,
     signal?: AbortSignal,
-    visibility?: Visibility,
+    options: SearchOptions = {},
   ): Promise<SearchResponse> {
     const payload = {
       query,
       limit: 10,
       offset: 0,
-      visibility,
+      visibility: options.visibility,
+      source: options.source,
     };
+    const headers: Record<string, string> = {};
+    if (options.remoteBase) {
+      headers['X-Remote-Base'] = options.remoteBase;
+    }
+    if (options.remoteApiKey) {
+      headers['X-Remote-Api-Key'] = options.remoteApiKey;
+    }
     return request<SearchResponse>(
       '/search',
-      { method: 'POST', body: JSON.stringify(payload), signal },
+      { method: 'POST', body: JSON.stringify(payload), signal, headers },
       auth
     );
   },

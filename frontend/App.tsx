@@ -42,6 +42,10 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+
+  useEffect(() => {
     setUnauthorizedHandler(() => {
       localStorage.removeItem(STORAGE_KEYS.token);
       localStorage.removeItem(STORAGE_KEYS.email);
