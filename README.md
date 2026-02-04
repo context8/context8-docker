@@ -24,9 +24,9 @@ docker compose up -d --build
 ## 主要服务
 - `frontend`: Vite + Nginx 静态站点
 - `api`: FastAPI + Postgres（写入时同步更新 ES；搜索只走 ES）
-- `embedding`: sentence-transformers 模型服务（可选；仅在启用 ES kNN 时使用）
+- `embedding`: sentence-transformers 模型服务（可选；仅在启用 ES kNN 时使用，`docker compose --profile semantic up`）
 - `elasticsearch`: 搜索索引
-- `postgres`: 业务数据库（pgvector）
+- `postgres`: 业务数据库（citext）
 
 ## 检索规则（重要）
 - `/search` **只走 Elasticsearch**（无 DB/pgvector 回退）。ES 不可用时会直接报错。
@@ -40,14 +40,19 @@ docker compose up -d --build
 - `API_KEY_SECRET`
 - `VITE_API_BASE`（前端访问后端的地址）
 
-如需启用邮件验证码（不推荐内网场景）：
+如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
+
+## 远程互联（可选）
+用于把 Docker 版当作 “互联入口”，查询远程 Context8（主系统或公网部署）。
+
+在 `.env` 设置：
 ```
-EMAIL_VERIFICATION_ENABLED=true
-RESEND_API_KEY=...
-RESEND_FROM=...
+REMOTE_CONTEXT8_BASE=https://your-context8.example.com
+REMOTE_CONTEXT8_API_KEY=...
+REMOTE_CONTEXT8_ALLOW_OVERRIDE=true
 ```
 
-如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
+调用 `/search` 时传 `source=remote` 或 `source=all`，即可走远程或本地+远程聚合搜索。
 
 ## 常用命令
 

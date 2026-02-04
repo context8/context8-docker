@@ -6,8 +6,9 @@
 - `DATABASE_URL`：Postgres 连接（本地示例：`postgresql+asyncpg://user:pass@host:5432/context8`）。
 - `JWT_SECRET`：签发/校验会话 JWT。
 - `API_KEY_SECRET`：用户 API Key 派生密钥。
-- `EMAIL_VERIFICATION_ENABLED`：是否启用邮件验证码（默认 false）。
-- 可选：`API_KEY` 旧版全局 key（不推荐生产）；`EMBEDDING_DIM` 默认为 384。
+- 可选：`API_KEY` 旧版全局 key（不推荐生产）。
+- 可选：`ES_URL`/`ES_INDEX`/`ES_KNN_WEIGHT`/`ES_BM25_WEIGHT` 控制检索；`EMBEDDING_API_URL`/`EMBEDDING_DIM` 控制向量维度。
+- 可选：`REMOTE_CONTEXT8_BASE` / `REMOTE_CONTEXT8_API_KEY` / `REMOTE_CONTEXT8_ALLOW_OVERRIDE` 用于远程互联搜索。
 
 ## 初始化
 ```bash
@@ -18,9 +19,8 @@ pip install -r requirements.txt
 export DATABASE_URL="postgresql+asyncpg://user:pass@host:5432/context8"
 export JWT_SECRET="replace_me"
 export API_KEY_SECRET="replace_me"
-export EMAIL_VERIFICATION_ENABLED="false"
 
-# 迁移（需要 citext/vector 权限）
+# 迁移（需要 citext 权限）
 alembic upgrade head
 
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -69,12 +69,21 @@ curl -X POST http://localhost:8000/apikeys \
     -H "Content-Type: application/json" \
     -d '{"visibility":"team"}'
   ```
-- 搜索（先向量，失败回退关键词）：
+- 搜索（仅走 Elasticsearch；向量检索需 ES_KNN_WEIGHT>0）：
   ```bash
   curl -X POST http://localhost:8000/search \
     -H "X-API-Key: <apiKey>" \
     -H "Content-Type: application/json" \
     -d '{"query":"example","limit":10,"visibility":"team"}'
+  ```
+  远程搜索（联邦）：
+  ```bash
+  curl -X POST http://localhost:8000/search \
+    -H "X-API-Key: <apiKey>" \
+    -H "X-Remote-Base: https://remote.context8.example" \
+    -H "X-Remote-Api-Key: <remoteKey>" \
+    -H "Content-Type: application/json" \
+    -d '{"query":"example","limit":10,"source":"remote"}'
   ```
 - 计数（精确返回当前用户总数）：
   ```bash
@@ -83,6 +92,5 @@ curl -X POST http://localhost:8000/apikeys \
   ```
 
 ## 其他
-- 启动会尝试创建 pgvector ivfflat 索引，不具备权限会告警但不会阻塞。
 - 迁移脚本 `alembic/versions/da16b97d5c07_add_email_verification_system.py` 幂等建表/扩展，EMBEDDING_DIM 取 env 或默认 384。
 - 嵌入为确定性占位实现，需替换为真实模型时只改 `app/embeddings.py`。

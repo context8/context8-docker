@@ -6,15 +6,14 @@ This guide explains how to deploy the Context8 CLI FastAPI application locally, 
 
 The local deployment consists of:
 - **`local_server.py`**: Main FastAPI server
-- **`local_cleanup.py`**: Scheduled cleanup task for expired verification codes
-- **`app/main.py`**: The FastAPI application (shared with Modal deployment)
+- **`app/main.py`**: The FastAPI application
 
 ## Prerequisites
 
 1. **Python 3.9+**
-2. **PostgreSQL 14+** with extensions:
+2. **PostgreSQL 14+** with extension:
    - `citext` (case-insensitive text)
-   - `pgvector` (vector similarity search)
+3. **Elasticsearch 8+** (required for search)
 3. **Dependencies** (install via requirements.txt)
 
 ## Setup Instructions
@@ -34,7 +33,6 @@ Create a PostgreSQL database with required extensions:
 CREATE DATABASE context8;
 \c context8
 CREATE EXTENSION IF NOT EXISTS citext;
-CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
 ### 3. Configure Environment Variables
@@ -57,15 +55,6 @@ JWT_SECRET=your-random-jwt-secret-here
 # API key secret for generating user API keys (generate a random string)
 API_KEY_SECRET=your-random-api-key-secret-here
 
-# Resend API key for sending verification emails (get from resend.com)
-RESEND_API_KEY=re_xxxxxxxxxxxxx
-RESEND_FROM=noreply@yourdomain.com
-
-# OpenRouter API key for LLM chat endpoint (get from openrouter.ai)
-OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxxx
-OPENROUTER_MODEL=openai/gpt-4o-mini
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_TITLE=Context8
 ```
 
 **Generate random secrets:**
@@ -89,36 +78,13 @@ python local_server.py --reload
 
 **Production mode**:
 ```bash
-python local_server.py --host 0.0.0.0 --port 8000 --workers 4
+python local_server.py --host 0.0.0.0 --port 8000 --workers 1
 ```
 
 The API will be available at:
 - Main API: http://127.0.0.1:8000
 - Interactive docs: http://127.0.0.1:8000/docs
 - OpenAPI spec: http://127.0.0.1:8000/openapi.json
-
-### 6. Set Up Cleanup Task
-
-The cleanup task removes expired verification codes (older than 24 hours).
-
-**Option A: Run once manually**
-```bash
-python local_cleanup.py
-```
-
-**Option B: Run continuously in the background**
-```bash
-python local_cleanup.py --schedule --interval 6  # Every 6 hours
-```
-
-**Option C: Set up a cron job** (recommended for production)
-```bash
-# Edit crontab
-crontab -e
-
-# Add this line to run cleanup every 6 hours
-0 */6 * * * cd /path/to/context8-CLI && /path/to/python local_cleanup.py
-```
 
 ## Production Deployment
 
@@ -136,27 +102,7 @@ Type=simple
 User=www-data
 WorkingDirectory=/path/to/context8-CLI
 Environment="PATH=/path/to/venv/bin"
-ExecStart=/path/to/venv/bin/python local_server.py --host 0.0.0.0 --port 8000 --workers 4
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Create cleanup service `/etc/systemd/system/context8-cleanup.service`:
-
-```ini
-[Unit]
-Description=Context8 Cleanup Task
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/path/to/context8-CLI
-Environment="PATH=/path/to/venv/bin"
-ExecStart=/path/to/venv/bin/python local_cleanup.py --schedule --interval 6
+ExecStart=/path/to/venv/bin/python local_server.py --host 0.0.0.0 --port 8000 --workers 1
 Restart=always
 RestartSec=10
 
@@ -167,16 +113,14 @@ WantedBy=multi-user.target
 Enable and start services:
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable context8-api context8-cleanup
-sudo systemctl start context8-api context8-cleanup
+sudo systemctl enable context8-api
+sudo systemctl start context8-api
 
 # Check status
 sudo systemctl status context8-api
-sudo systemctl status context8-cleanup
 
 # View logs
 sudo journalctl -u context8-api -f
-sudo journalctl -u context8-cleanup -f
 ```
 
 ### Using Docker
@@ -204,7 +148,7 @@ COPY . .
 EXPOSE 8000
 
 # Run the application
-CMD ["python", "local_server.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["python", "local_server.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
 ```
 
 Create `docker-compose.yml`:
@@ -214,7 +158,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: postgres:16
     environment:
       POSTGRES_DB: context8
       POSTGRES_USER: context8
@@ -224,31 +168,40 @@ services:
     ports:
       - "5432:5432"
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+
   api:
     build: .
     depends_on:
       - postgres
+      - elasticsearch
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:your_password_here@postgres:5432/context8
+      ES_URL: http://elasticsearch:9200
     env_file:
       - .env
     ports:
       - "8000:8000"
     restart: unless-stopped
 
-  cleanup:
-    build: .
-    depends_on:
-      - postgres
-    environment:
-      DATABASE_URL: postgresql+asyncpg://context8:your_password_here@postgres:5432/context8
-    env_file:
-      - .env
-    command: python local_cleanup.py --schedule --interval 6
-    restart: unless-stopped
-
 volumes:
   postgres_data:
+  es_data:
 ```
 
 Run with Docker Compose (runs migrations on startup):
@@ -289,10 +242,9 @@ See the interactive documentation at `/docs` for a complete API reference.
 - `GET /solutions` - List user's solutions
 - `GET /solutions/{id}` - Get a specific solution
 - `POST /search` - Search for solutions
-- `POST /llm/chat` - Chat with the assistant (requires auth)
-- `POST /auth/email/send-code` - Send verification code
-- `POST /auth/email/verify-code` - Verify code and get session
-- `POST /api-keys` - Generate API key
+- `POST /auth/setup` - Create the first admin
+- `POST /auth/login` - Login (admin)
+- `POST /apikeys` - Generate API key
 
 ## Monitoring
 

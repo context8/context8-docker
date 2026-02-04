@@ -15,6 +15,7 @@
 | 复杂度取向 | **最少组件、最少隐式行为** | 允许复杂换吞吐/弹性/异步 |
 | 搜索源 | **ES 作为唯一检索源** | ES 优先，失败回退 pgvector，再回退 DB 关键词 |
 | 写入一致性 | 同步写 ES（不依赖队列） | 写入 DB 后入队（RQ/Redis），异步算 embedding + 同步 ES |
+| 互联模式 | **可选远程联邦搜索**（`source=remote/all`） | 作为中心服务，默认不做跨实例聚合 |
 
 ## 2) 服务编排（docker compose）对比
 
@@ -85,3 +86,11 @@
 - 不保留“ES 不可用时的假回退”（否则你永远不知道 ES 什么时候坏了）
 - 不把“增长逻辑”（曝光、搜索写回、自动 upvote）塞进内网版
 
+## 8) 远程互联（联邦搜索）
+
+轻量版允许把 `/search` 作为联邦入口：
+- 通过 `REMOTE_CONTEXT8_BASE/REMOTE_CONTEXT8_API_KEY` 配置远程 Context8
+- 请求时用 `source=remote` 或 `source=all` 合并本地与远程结果
+- 远端接口仍然是标准 `/search`（X-API-Key 认证）
+
+主系统本身就是“远端”，默认不内置跨实例聚合逻辑。

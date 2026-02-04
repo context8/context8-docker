@@ -6,6 +6,7 @@ Get Context8 CLI running locally in 5 minutes.
 
 - Python 3.9+
 - PostgreSQL 14+ (or use Docker)
+- Elasticsearch 8+ (required for search)
 
 ## Quick Start
 
@@ -40,20 +41,21 @@ pip install -r requirements.txt
 # 2. Set up PostgreSQL database
 createdb context8
 psql context8 -c "CREATE EXTENSION IF NOT EXISTS citext;"
-psql context8 -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-# 3. Copy and configure environment
+# 3. Start Elasticsearch (default http://localhost:9200)
+#    Use Docker if needed:
+#    docker run -d --name context8-es -p 9200:9200 -e "discovery.type=single-node" -e "xpack.security.enabled=false" docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+
+# 4. Copy and configure environment
 cp .env.example .env
 # Edit .env with your database URL and secrets
 
-# 4. Run migrations
+# 5. Run migrations
 alembic upgrade head
 
-# 5. Start the server
+# 6. Start the server
 python local_server.py --reload
 
-# 6. (Optional) In another terminal, start cleanup task
-python local_cleanup.py --schedule
 ```
 
 ### Option 3: Using Makefile
@@ -83,12 +85,6 @@ DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/context8
 JWT_SECRET=<random-secret>
 API_KEY_SECRET=<random-secret>
 
-# Email (get from resend.com)
-RESEND_API_KEY=re_xxxxx
-RESEND_FROM=noreply@yourdomain.com
-
-# LLM (get from openrouter.ai)
-OPENROUTER_API_KEY=sk-or-xxxxx
 ```
 
 ## Generate Secrets
@@ -107,10 +103,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 # Check health
 curl http://localhost:8000/docs
 
-# Create a test user
-curl -X POST http://localhost:8000/auth/email/send-code \
+# Initialize admin
+curl -X POST http://localhost:8000/auth/setup \
   -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com"}'
+  -d '{"username":"admin","password":"changeme123"}'
 ```
 
 ## Next Steps
@@ -146,12 +142,10 @@ pip install -r requirements.txt --upgrade
 ```bash
 # Development
 make dev              # Run with auto-reload
-make cleanup          # Run cleanup once
 make test             # Run tests
 
 # Production
-make prod             # Run with 4 workers
-make cleanup-schedule # Run cleanup continuously
+make prod             # Run with 1 worker
 
 # Docker
 make docker-up        # Start all services

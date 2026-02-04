@@ -38,7 +38,6 @@ docker-compose logs -f
 数据库首次启动时会自动执行 `init-db.sql`：
 
 1. 创建 `citext` 扩展（不区分大小写的文本）
-2. 创建 `vector` 扩展（pgvector，用于向量相似度搜索）
 
 ### 重新初始化数据库
 
