@@ -30,7 +30,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
     command: >
-      /bin/sh -c "python local_server.py --host 0.0.0.0 --port 8000 --workers 4"
+      /bin/sh -c "python local_server.py --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"
     ports:
       - "${API_PORT:-8000}:8000"
     restart: unless-stopped
