@@ -15,13 +15,21 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(inspector, table: str, column: str) -> bool:
+    return any(col["name"] == column for col in inspector.get_columns(table))
+
+
 def upgrade() -> None:
-    op.add_column(
-        "solutions",
-        sa.Column("embedding_status", sa.String(), nullable=False, server_default=sa.text("'pending'")),
-    )
-    op.add_column("solutions", sa.Column("embedding_error", sa.Text(), nullable=True))
-    op.add_column("solutions", sa.Column("embedding_updated_at", sa.DateTime(timezone=True), nullable=True))
+    inspector = sa.inspect(op.get_bind())
+    if not _has_column(inspector, "solutions", "embedding_status"):
+        op.add_column(
+            "solutions",
+            sa.Column("embedding_status", sa.String(), nullable=False, server_default=sa.text("'pending'")),
+        )
+    if not _has_column(inspector, "solutions", "embedding_error"):
+        op.add_column("solutions", sa.Column("embedding_error", sa.Text(), nullable=True))
+    if not _has_column(inspector, "solutions", "embedding_updated_at"):
+        op.add_column("solutions", sa.Column("embedding_updated_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
