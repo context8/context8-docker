@@ -14,6 +14,11 @@ ES_PASSWORD = os.environ.get("ES_PASSWORD")
 ES_KNN_WEIGHT = float(os.environ.get("ES_KNN_WEIGHT", "0"))
 ES_BM25_WEIGHT = float(os.environ.get("ES_BM25_WEIGHT", "1"))
 
+def _require_es_url() -> str:
+    if not ES_URL:
+        raise RuntimeError("Elasticsearch is not configured (ES_URL missing)")
+    return ES_URL
+
 
 def _auth() -> Optional[tuple[str, str]]:
     if ES_USERNAME and ES_PASSWORD:
@@ -204,27 +209,24 @@ async def fetch_solution_es(
 
 
 async def index_solution_es(doc_id: str, payload: dict[str, Any]) -> None:
-    if not ES_URL:
-        return
+    es_url = _require_es_url()
     async with httpx.AsyncClient(timeout=ES_TIMEOUT, auth=_auth()) as client:
-        resp = await client.put(f"{ES_URL}/{ES_INDEX}/_doc/{doc_id}", json=payload)
+        resp = await client.put(f"{es_url}/{ES_INDEX}/_doc/{doc_id}", json=payload)
         resp.raise_for_status()
 
 
 async def update_solution_es(doc_id: str, payload: dict[str, Any]) -> None:
-    if not ES_URL:
-        return
+    es_url = _require_es_url()
     body = {"doc": payload, "doc_as_upsert": True}
     async with httpx.AsyncClient(timeout=ES_TIMEOUT, auth=_auth()) as client:
-        resp = await client.post(f"{ES_URL}/{ES_INDEX}/_update/{doc_id}", json=body)
+        resp = await client.post(f"{es_url}/{ES_INDEX}/_update/{doc_id}", json=body)
         resp.raise_for_status()
 
 
 async def delete_solution_es(doc_id: str) -> None:
-    if not ES_URL:
-        return
+    es_url = _require_es_url()
     async with httpx.AsyncClient(timeout=ES_TIMEOUT, auth=_auth()) as client:
-        resp = await client.delete(f"{ES_URL}/{ES_INDEX}/_doc/{doc_id}")
+        resp = await client.delete(f"{es_url}/{ES_INDEX}/_doc/{doc_id}")
         if resp.status_code in (200, 404):
             return
         resp.raise_for_status()

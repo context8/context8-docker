@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 import httpx
-from redis import Redis
 from .database import Base, engine, get_session
 from .schemas import (
   SolutionCreate,
@@ -40,11 +39,15 @@ from .crud import (
   get_solution_vote,
   set_solution_vote,
   clear_solution_vote,
-  bump_upvotes,
 )
-from .es import search_solutions_es, fetch_solution_es
+from .es import (
+  search_solutions_es,
+  fetch_solution_es,
+  index_solution_es,
+  update_solution_es,
+  delete_solution_es,
+)
 from .embeddings import embed_text
-from .worker import enqueue_embedding_task, enqueue_es_sync_task, enqueue_es_delete_task
 from .api_keys import router as apikey_router, resolve_api_keys, list_active_api_keys, ApiKey
 from .users import User
 from jose import jwt
@@ -100,13 +103,6 @@ SYSTEM_PROMPT = (
 
 SEARCH_ES_TIMEOUT = float(os.environ.get("SEARCH_ES_TIMEOUT", "3"))
 SEARCH_EMBED_TIMEOUT = float(os.environ.get("SEARCH_EMBED_TIMEOUT", "4"))
-REDIS_URL = os.environ.get("REDIS_URL")
-EMBED_QUEUE_NAME = os.environ.get("EMBED_QUEUE_NAME", "embedding")
-ES_QUEUE_NAME = os.environ.get("ES_QUEUE_NAME", "es_sync")
-EMBED_METRICS_PREFIX = os.environ.get("EMBEDDING_METRICS_PREFIX", "context8:embedding")
-ES_METRICS_PREFIX = os.environ.get("ES_METRICS_PREFIX", "context8:es_sync")
-EMBED_QUEUE_WARN = int(os.environ.get("EMBED_QUEUE_WARN", "100"))
-ES_QUEUE_WARN = int(os.environ.get("ES_QUEUE_WARN", "100"))
 
 TOOL_DEF = {
   "type": "function",
@@ -147,27 +143,6 @@ def _normalize_es_tags(value) -> list[str]:
     except Exception:
       return []
   return []
-
-
-async def _bump_search_upvotes(
-  db: AsyncSession,
-  result_ids: list[str],
-  api_key_ids: list[str],
-  allow_team: bool,
-  allow_admin: bool,
-) -> None:
-  if not result_ids:
-    return
-  try:
-    await bump_upvotes(db, result_ids, api_key_ids, allow_team, allow_admin)
-  except Exception as exc:
-    print(f"search upvote bump failed: {exc}")
-    return
-  for solution_id in result_ids:
-    try:
-      enqueue_es_sync_task(solution_id)
-    except Exception as exc:
-      print(f"enqueue es sync failed for {solution_id}: {exc}")
 
 
 def _build_embedding_payload(query: str) -> dict:
@@ -283,13 +258,6 @@ async def _search_for_user(
   total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
 
   if results:
-    await _bump_search_upvotes(
-      db,
-      [item.id for item in results],
-      api_key_ids,
-      allow_team,
-      allow_admin,
-    )
     if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
       print(f"search:es_hit results={len(results)}")
 
@@ -538,67 +506,6 @@ app.include_router(apikey_router)
 app.include_router(auth_router)
 app.include_router(email_auth_router)
 
-
-def _get_redis() -> Redis | None:
-  if not REDIS_URL:
-    return None
-  try:
-    return Redis.from_url(REDIS_URL)
-  except Exception:
-    return None
-
-
-def _read_counter(conn: Redis, key: str) -> int:
-  try:
-    raw = conn.get(key)
-    if raw is None:
-      return 0
-    return int(raw)
-  except Exception:
-    return 0
-
-
-def _queue_length(conn: Redis, queue_name: str) -> int:
-  try:
-    return int(conn.llen(f"rq:queue:{queue_name}"))
-  except Exception:
-    return 0
-
-
-@app.get("/internal/queue-metrics")
-async def queue_metrics(
-  scope: dict = Depends(require_solution_write_scope),
-):
-  conn = _get_redis()
-  if not conn:
-    return {"redis": "unavailable"}
-  embed_len = _queue_length(conn, EMBED_QUEUE_NAME)
-  es_len = _queue_length(conn, ES_QUEUE_NAME)
-  return {
-    "queues": {
-      "embedding": embed_len,
-      "es_sync": es_len,
-    },
-    "warnings": {
-      "embedding": embed_len >= EMBED_QUEUE_WARN,
-      "es_sync": es_len >= ES_QUEUE_WARN,
-    },
-    "counters": {
-      "embedding": {
-        "success": _read_counter(conn, f"{EMBED_METRICS_PREFIX}:success:total"),
-        "failed": _read_counter(conn, f"{EMBED_METRICS_PREFIX}:failed:total"),
-        "retry": _read_counter(conn, f"{EMBED_METRICS_PREFIX}:retry:total"),
-        "es_failed": _read_counter(conn, f"{EMBED_METRICS_PREFIX}:es_failed:total"),
-      },
-      "es_sync": {
-        "success": _read_counter(conn, f"{ES_METRICS_PREFIX}:success:total"),
-        "failed": _read_counter(conn, f"{ES_METRICS_PREFIX}:failed:total"),
-        "retry": _read_counter(conn, f"{ES_METRICS_PREFIX}:retry:total"),
-      },
-    },
-  }
-
-
 @app.on_event("startup")
 async def on_startup():
   async with engine.begin() as conn:
@@ -624,30 +531,83 @@ async def save_solution(
   sol = await create_solution(db, payload, key_item.id, user_id, visibility)
   db_ms = (time.perf_counter() - start) * 1000
 
-  es_start = time.perf_counter()
-  try:
-    enqueue_es_sync_task(sol.id)
-  except Exception as e:
-    print(f"enqueue es sync failed for {sol.id}: {e}")
-  es_ms = (time.perf_counter() - es_start) * 1000
-
-  embed_start = time.perf_counter()
-  try:
-    enqueue_embedding_task(sol.id)
-  except Exception as e:
-    sol.embedding_status = "failed"
-    sol.embedding_error = str(e)
+  embedding: list[float] | None = None
+  embed_ms = 0.0
+  if _knn_enabled():
+    embed_start = time.perf_counter()
+    try:
+      embedding = await asyncio.wait_for(
+        embed_text(
+          {
+            "title": sol.title,
+            "errorMessage": sol.error_message,
+            "errorType": sol.error_type,
+            "context": sol.context,
+            "rootCause": sol.root_cause,
+            "solution": sol.solution,
+            "tags": sol.tags or [],
+            "environment": sol.environment,
+          }
+        ),
+        timeout=SEARCH_EMBED_TIMEOUT,
+      )
+      sol.embedding_status = "done"
+      sol.embedding_error = None
+    except Exception as exc:
+      sol.embedding_status = "failed"
+      sol.embedding_error = str(exc) or exc.__class__.__name__
     sol.embedding_updated_at = datetime.now(timezone.utc)
     await db.commit()
-    print(f"enqueue failed for {sol.id}: {e}")
-  embed_ms = (time.perf_counter() - embed_start) * 1000
+    embed_ms = (time.perf_counter() - embed_start) * 1000
+  else:
+    sol.embedding_status = "skipped"
+    sol.embedding_error = None
+    sol.embedding_updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+  es_start = time.perf_counter()
+  try:
+    doc: dict = {
+      "id": sol.id,
+      "user_id": sol.user_id,
+      "api_key_id": sol.api_key_id,
+      "title": sol.title,
+      "error_message": sol.error_message,
+      "error_type": sol.error_type,
+      "context": sol.context,
+      "root_cause": sol.root_cause,
+      "solution": sol.solution,
+      "code_changes": sol.code_changes,
+      "tags": sol.tags or [],
+      "conversation_language": sol.conversation_language,
+      "programming_language": sol.programming_language,
+      "vibecoding_software": sol.vibecoding_software,
+      "project_path": sol.project_path,
+      "environment": sol.environment,
+      "visibility": sol.visibility,
+      "upvotes": int(sol.upvotes or 0),
+      "downvotes": int(sol.downvotes or 0),
+      "created_at": sol.created_at.isoformat() if sol.created_at else None,
+    }
+    if embedding is not None:
+      doc["embedding"] = embedding
+    await index_solution_es(sol.id, doc)
+  except Exception as exc:
+    # Elasticsearch is the only search source in docker-light; avoid persisting unsearchable rows.
+    try:
+      await db.delete(sol)
+      await db.commit()
+    except Exception:
+      await db.rollback()
+    raise HTTPException(status_code=502, detail=f"Failed to index solution in Elasticsearch: {exc}") from exc
+  es_ms = (time.perf_counter() - es_start) * 1000
 
   if _timing_enabled():
     total_ms = (time.perf_counter() - start) * 1000
     print(
       "timing:create_solution "
-      f"id={sol.id} db_ms={db_ms:.2f} es_enqueue_ms={es_ms:.2f} "
-      f"embed_enqueue_ms={embed_ms:.2f} total_ms={total_ms:.2f}"
+      f"id={sol.id} db_ms={db_ms:.2f} embed_ms={embed_ms:.2f} "
+      f"es_ms={es_ms:.2f} total_ms={total_ms:.2f}"
     )
 
   return SolutionOut(
@@ -859,13 +819,12 @@ async def vote_solution(
   except ValueError as exc:
     raise HTTPException(status_code=400, detail=str(exc))
 
-  try:
-    enqueue_es_sync_task(sol.id)
-  except Exception as e:
-    print(f"enqueue es sync failed for {sol.id}: {e}")
-
   upvotes = int(sol.upvotes or 0)
   downvotes = int(sol.downvotes or 0)
+  try:
+    await update_solution_es(sol.id, {"upvotes": upvotes, "downvotes": downvotes})
+  except Exception as exc:
+    print(f"es vote sync failed for {sol.id}: {exc}")
   return VoteResponse(
     solutionId=sol.id,
     upvotes=upvotes,
@@ -895,13 +854,12 @@ async def clear_vote_solution(
     raise HTTPException(status_code=404, detail="Not found")
 
   await clear_solution_vote(db, sol, scope["user_id"])
-  try:
-    enqueue_es_sync_task(sol.id)
-  except Exception as e:
-    print(f"enqueue es sync failed for {sol.id}: {e}")
-
   upvotes = int(sol.upvotes or 0)
   downvotes = int(sol.downvotes or 0)
+  try:
+    await update_solution_es(sol.id, {"upvotes": upvotes, "downvotes": downvotes})
+  except Exception as exc:
+    print(f"es vote sync failed for {sol.id}: {exc}")
   return VoteResponse(
     solutionId=sol.id,
     upvotes=upvotes,
@@ -925,9 +883,9 @@ async def delete_user_solution(
     raise HTTPException(status_code=404, detail="Not found")
   es_start = time.perf_counter()
   try:
-    enqueue_es_delete_task(solution_id)
-  except Exception as e:
-    print(f"enqueue es delete failed for {solution_id}: {e}")
+    await delete_solution_es(solution_id)
+  except Exception as exc:
+    print(f"es delete failed for {solution_id}: {exc}")
   es_ms = (time.perf_counter() - es_start) * 1000
   total_ms = (time.perf_counter() - start) * 1000
   print(f"timing:delete_solution id={solution_id} db_ms={db_ms:.2f} es_ms={es_ms:.2f} total_ms={total_ms:.2f}")
@@ -956,9 +914,9 @@ async def set_solution_visibility(
   if not sol:
     raise HTTPException(status_code=404, detail="Not found")
   try:
-    enqueue_es_sync_task(sol.id)
-  except Exception as e:
-    print(f"enqueue es sync failed for {sol.id}: {e}")
+    await update_solution_es(sol.id, {"visibility": sol.visibility})
+  except Exception as exc:
+    print(f"es visibility sync failed for {sol.id}: {exc}")
   return SolutionVisibilityOut(id=sol.id, visibility=sol.visibility)
 
 
@@ -1024,13 +982,6 @@ async def search(
   total = es_resp.get("hits", {}).get("total", {}).get("value", len(results))
 
   if results:
-    await _bump_search_upvotes(
-      db,
-      [item.id for item in results],
-      scope["api_key_ids"],
-      scope["allow_team"],
-      scope.get("allow_admin", False),
-    )
     if os.environ.get("SEARCH_DEBUG", "").lower() in ("1", "true", "yes"):
       print(f"search:es_hit results={len(results)}")
 
