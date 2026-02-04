@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 from .database import get_session
 from .schemas import (
   SolutionCreate,
@@ -117,6 +118,41 @@ def _build_embedding_payload(query: str) -> dict:
     "tags": [],
     "environment": None
   }
+
+
+async def _count_solutions_since(db: AsyncSession, api_key_id: str, since: datetime) -> int:
+  stmt = select(func.count()).select_from(Solution).where(
+    Solution.api_key_id == api_key_id,
+    Solution.created_at >= since,
+  )
+  res = await db.execute(stmt)
+  return res.scalar() or 0
+
+
+async def _enforce_api_key_limits(db: AsyncSession, api_key: ApiKey) -> None:
+  daily_limit = api_key.daily_limit
+  monthly_limit = api_key.monthly_limit
+  if daily_limit is None and monthly_limit is None:
+    return
+
+  now = datetime.now(timezone.utc)
+  if daily_limit is not None:
+    day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    daily_count = await _count_solutions_since(db, api_key.id, day_start)
+    if daily_count >= daily_limit:
+      raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Daily API key limit exceeded ({daily_limit})",
+      )
+
+  if monthly_limit is not None:
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    monthly_count = await _count_solutions_since(db, api_key.id, month_start)
+    if monthly_count >= monthly_limit:
+      raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Monthly API key limit exceeded ({monthly_limit})",
+      )
 
 
 async def _embed_query(query: str) -> list[float] | None:
@@ -344,6 +380,7 @@ async def save_solution(
     visibility = normalize_visibility(payload.visibility) or VISIBILITY_PRIVATE
   except ValueError as exc:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+  await _enforce_api_key_limits(db, key_item)
   sol = await create_solution(db, payload, key_item.id, user_id, visibility)
   db_ms = (time.perf_counter() - start) * 1000
 

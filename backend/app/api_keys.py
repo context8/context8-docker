@@ -4,13 +4,14 @@ import uuid
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from .database import get_session, Base
-from sqlalchemy import Column, String, DateTime, Boolean
+from sqlalchemy import Column, String, DateTime, Boolean, Integer
 from .auth import require_admin_user
 from .users import User
 from .models import Solution, SolutionVote
 from .es import delete_solution_es
+from .schemas import ApiKeyCreate, ApiKeyLimitsUpdate, ApiKeyOut
 
 
 class ApiKey(Base):
@@ -21,6 +22,8 @@ class ApiKey(Base):
     key_hash = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     revoked = Column(Boolean, default=False)
+    daily_limit = Column(Integer, nullable=True)
+    monthly_limit = Column(Integer, nullable=True)
     # No public visibility on keys; access is managed per-solution.
 
 
@@ -49,24 +52,87 @@ async def _cleanup_solutions_for_key(db: AsyncSession, key_id: str) -> None:
 
 @router.post("")
 async def create_api_key(
-    name: str,
+    payload: ApiKeyCreate | None = Body(default=None),
+    name: str | None = Query(default=None),
+    daily_limit: int | None = Query(default=None, ge=0, alias="dailyLimit"),
+    monthly_limit: int | None = Query(default=None, ge=0, alias="monthlyLimit"),
     db: AsyncSession = Depends(get_session),
     admin_user: User = Depends(require_admin_user),
 ):
+    if payload:
+        name = payload.name
+        if payload.dailyLimit is not None:
+            daily_limit = payload.dailyLimit
+        if payload.monthlyLimit is not None:
+            monthly_limit = payload.monthlyLimit
+
+    if not name or not name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+
     raw_key = secrets.token_urlsafe(32)
     hashed = hash_key(raw_key)
     key_id = secrets.token_hex(8)
-    record = ApiKey(id=key_id, user_id=str(admin_user.id), name=name, key_hash=hashed)
+    record = ApiKey(
+        id=key_id,
+        user_id=str(admin_user.id),
+        name=name.strip(),
+        key_hash=hashed,
+        daily_limit=daily_limit,
+        monthly_limit=monthly_limit,
+    )
     db.add(record)
     await db.commit()
-    return {"id": key_id, "apiKey": raw_key}
+    return {
+        "id": key_id,
+        "apiKey": raw_key,
+        "dailyLimit": daily_limit,
+        "monthlyLimit": monthly_limit,
+    }
 
 
-@router.get("")
+@router.get("", response_model=list[ApiKeyOut])
 async def list_api_keys(db: AsyncSession = Depends(get_session), admin_user: User = Depends(require_admin_user)):
     res = await db.execute(select(ApiKey).where(ApiKey.user_id == str(admin_user.id), ApiKey.revoked == False))
     items = res.scalars().all()
-    return [{"id": i.id, "name": i.name, "createdAt": i.created_at} for i in items]
+    return [
+        {
+            "id": i.id,
+            "name": i.name,
+            "createdAt": i.created_at,
+            "dailyLimit": i.daily_limit,
+            "monthlyLimit": i.monthly_limit,
+        }
+        for i in items
+    ]
+
+
+@router.patch("/{key_id}/limits", response_model=ApiKeyOut)
+async def update_api_key_limits(
+    key_id: str,
+    payload: ApiKeyLimitsUpdate,
+    db: AsyncSession = Depends(get_session),
+    admin_user: User = Depends(require_admin_user),
+):
+    res = await db.execute(select(ApiKey).where(ApiKey.id == key_id, ApiKey.user_id == str(admin_user.id)))
+    item = res.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    fields = payload.model_fields_set
+    if "dailyLimit" in fields:
+        item.daily_limit = payload.dailyLimit
+    if "monthlyLimit" in fields:
+        item.monthly_limit = payload.monthlyLimit
+
+    await db.commit()
+    await db.refresh(item)
+    return {
+        "id": item.id,
+        "name": item.name,
+        "createdAt": item.created_at,
+        "dailyLimit": item.daily_limit,
+        "monthlyLimit": item.monthly_limit,
+    }
 
 
 @router.delete("/{key_id}")

@@ -135,3 +135,31 @@ class VoteResponse(BaseModel):
     downvotes: int
     voteScore: int
     myVote: Optional[int] = None
+
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    dailyLimit: Optional[int] = Field(default=None, ge=0)
+    monthlyLimit: Optional[int] = Field(default=None, ge=0)
+
+    class Config:
+        populate_by_name = True
+
+
+class ApiKeyLimitsUpdate(BaseModel):
+    dailyLimit: Optional[int] = Field(default=None, ge=0)
+    monthlyLimit: Optional[int] = Field(default=None, ge=0)
+
+    class Config:
+        populate_by_name = True
+
+
+class ApiKeyOut(BaseModel):
+    id: str
+    name: str
+    createdAt: datetime
+    dailyLimit: Optional[int] = None
+    monthlyLimit: Optional[int] = None
+
+    class Config:
+        populate_by_name = True
