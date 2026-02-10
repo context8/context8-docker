@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context8 Docker Deploy"
+  short_description: "Deploy Context8 Docker via Compose"
+  default_prompt: "Use $context8-docker-deploy to clone, configure, and deploy Context8 Docker."
