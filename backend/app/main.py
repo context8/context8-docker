@@ -140,6 +140,20 @@ def _sanitize_url(value: str | None) -> str | None:
   except Exception:
     return value
 
+def _derive_embedding_health_url() -> str | None:
+  explicit = (os.environ.get("EMBEDDING_HEALTH_URL") or "").strip()
+  if explicit:
+    return explicit
+  if not EMBEDDING_API_URL:
+    return None
+  try:
+    parsed = urlparse(EMBEDDING_API_URL)
+    if not parsed.scheme or not parsed.netloc:
+      return None
+    return urlunparse((parsed.scheme, parsed.netloc, "/health", "", "", ""))
+  except Exception:
+    return None
+
 def _knn_enabled() -> bool:
   try:
     return float(os.environ.get("ES_KNN_WEIGHT", "0")) > 0
@@ -572,9 +586,7 @@ async def _collect_status(db: AsyncSession) -> dict:
     components["remote"] = {"status": "disabled"}
 
   if _knn_enabled():
-    health_url = os.environ.get("EMBEDDING_HEALTH_URL")
-    if not health_url and EMBEDDING_API_URL:
-      health_url = EMBEDDING_API_URL.replace("/embed", "/health")
+    health_url = _derive_embedding_health_url()
     if not health_url:
       components["embedding"] = {"status": "error", "detail": "kNN enabled but embedding endpoint is not configured"}
       overall = "degraded"
