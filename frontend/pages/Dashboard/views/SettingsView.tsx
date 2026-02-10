@@ -219,43 +219,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ theme }) => {
   const { toasts, success, error, dismiss } = useToast();
   const isDark = theme === 'dark';
 
-  const normalized = useMemo(() => normalizeConfig(status?.config), [status?.config]);
+  const serverConfig = useMemo(() => normalizeConfig(status?.config), [status?.config]);
   const [initialized, setInitialized] = useState(false);
 
-  const [frontendPort, setFrontendPort] = useState(normalized.frontendPort);
-  const [allowOrigins, setAllowOrigins] = useState(normalized.allowOrigins);
-  const [originRegex, setOriginRegex] = useState(normalized.originRegex);
-  const [allowCredentials, setAllowCredentials] = useState(normalized.allowCredentials);
+  const [frontendPort, setFrontendPort] = useState(serverConfig.frontendPort);
+  const [allowOrigins, setAllowOrigins] = useState(serverConfig.allowOrigins);
+  const [originRegex, setOriginRegex] = useState(serverConfig.originRegex);
+  const [allowCredentials, setAllowCredentials] = useState(serverConfig.allowCredentials);
 
-  const [semanticEnabled, setSemanticEnabled] = useState(normalized.enabled);
-  const [knnWeight, setKnnWeight] = useState(normalized.knnWeight);
-  const [bm25Weight, setBm25Weight] = useState(normalized.bm25Weight);
-  const [embeddingApiUrl, setEmbeddingApiUrl] = useState(normalized.embeddingApiUrl);
-  const [embeddingStrict, setEmbeddingStrict] = useState(normalized.embeddingStrict);
+  const [semanticEnabled, setSemanticEnabled] = useState(serverConfig.enabled);
+  const [knnWeight, setKnnWeight] = useState(serverConfig.knnWeight);
+  const [bm25Weight, setBm25Weight] = useState(serverConfig.bm25Weight);
+  const [embeddingApiUrl, setEmbeddingApiUrl] = useState(serverConfig.embeddingApiUrl);
+  const [embeddingStrict, setEmbeddingStrict] = useState(serverConfig.embeddingStrict);
 
-  const [remoteBase, setRemoteBase] = useState(normalized.remoteBase);
+  const [remoteBase, setRemoteBase] = useState(serverConfig.remoteBase);
   const [remoteApiKey, setRemoteApiKey] = useState('');
-  const [remoteAllowOverride, setRemoteAllowOverride] = useState(normalized.remoteAllowOverride);
-  const [remoteAllowedHosts, setRemoteAllowedHosts] = useState(normalized.remoteAllowedHosts);
-  const [remoteTimeoutSec, setRemoteTimeoutSec] = useState(normalized.remoteTimeoutSec);
+  const [remoteAllowOverride, setRemoteAllowOverride] = useState(serverConfig.remoteAllowOverride);
+  const [remoteAllowedHosts, setRemoteAllowedHosts] = useState(serverConfig.remoteAllowedHosts);
+  const [remoteTimeoutSec, setRemoteTimeoutSec] = useState(serverConfig.remoteTimeoutSec);
 
   useEffect(() => {
     if (initialized) return;
-    setFrontendPort(normalized.frontendPort);
-    setAllowOrigins(normalized.allowOrigins);
-    setOriginRegex(normalized.originRegex);
-    setAllowCredentials(normalized.allowCredentials);
-    setSemanticEnabled(normalized.enabled);
-    setKnnWeight(normalized.knnWeight);
-    setBm25Weight(normalized.bm25Weight);
-    setEmbeddingApiUrl(normalized.embeddingApiUrl);
-    setEmbeddingStrict(normalized.embeddingStrict);
-    setRemoteBase(normalized.remoteBase);
-    setRemoteAllowOverride(normalized.remoteAllowOverride);
-    setRemoteAllowedHosts(normalized.remoteAllowedHosts);
-    setRemoteTimeoutSec(normalized.remoteTimeoutSec);
+    if (!status?.config) return;
+    setFrontendPort(serverConfig.frontendPort);
+    setAllowOrigins(serverConfig.allowOrigins);
+    setOriginRegex(serverConfig.originRegex);
+    setAllowCredentials(serverConfig.allowCredentials);
+    setSemanticEnabled(serverConfig.enabled);
+    setKnnWeight(serverConfig.knnWeight);
+    setBm25Weight(serverConfig.bm25Weight);
+    setEmbeddingApiUrl(serverConfig.embeddingApiUrl);
+    setEmbeddingStrict(serverConfig.embeddingStrict);
+    setRemoteBase(serverConfig.remoteBase);
+    setRemoteAllowOverride(serverConfig.remoteAllowOverride);
+    setRemoteAllowedHosts(serverConfig.remoteAllowedHosts);
+    setRemoteTimeoutSec(serverConfig.remoteTimeoutSec);
     setInitialized(true);
-  }, [initialized, normalized]);
+  }, [initialized, status?.config, serverConfig]);
 
   const copyText = async (text: string) => {
     try {
@@ -485,7 +486,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ theme }) => {
               </div>
               <div className="flex items-center gap-2 text-xs text-foreground-light">
                 <Shield size={14} />
-                <span>{normalized.remoteConfigured ? 'Configured' : 'Not configured'}</span>
+                <span>{serverConfig.remoteConfigured ? 'Configured' : 'Not configured'}</span>
               </div>
             </div>
 
