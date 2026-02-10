@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse, urlunparse
 from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,8 +45,12 @@ from .es import (
   ensure_es_index,
   ES_URL,
   ES_INDEX,
+  ES_TIMEOUT,
+  ES_KNN_WEIGHT,
+  ES_BM25_WEIGHT,
+  EMBEDDING_DIM,
 )
-from .embeddings import embed_text, EMBEDDING_API_URL
+from .embeddings import embed_text, EMBEDDING_API_URL, EMBEDDING_TIMEOUT, EMBEDDING_STRICT
 from .api_keys import (
   router as apikey_router,
   resolve_api_keys,
@@ -61,6 +66,9 @@ from .remote import (
   remote_search,
   REMOTE_CONTEXT8_BASE,
   REMOTE_CONTEXT8_API_KEY,
+  REMOTE_CONTEXT8_ALLOW_OVERRIDE,
+  REMOTE_CONTEXT8_TIMEOUT,
+  REMOTE_CONTEXT8_ALLOWED_HOSTS,
 )
 from .es_docs import solution_to_es_doc
 from .auth import (
@@ -117,6 +125,20 @@ SEARCH_EMBED_TIMEOUT = float(os.environ.get("SEARCH_EMBED_TIMEOUT", "4"))
 STATUS_TIMEOUT = float(os.environ.get("STATUS_TIMEOUT", "2.5"))
 STATUS_REMOTE_TIMEOUT = float(os.environ.get("STATUS_REMOTE_TIMEOUT", "3"))
 STATUS_EMBED_TIMEOUT = float(os.environ.get("STATUS_EMBED_TIMEOUT", "2.5"))
+
+def _sanitize_url(value: str | None) -> str | None:
+  if not value:
+    return None
+  try:
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+      return value
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{host}{port}"
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
+  except Exception:
+    return value
 
 def _knn_enabled() -> bool:
   try:
@@ -576,6 +598,42 @@ async def _collect_status(db: AsyncSession) -> dict:
     "environment": os.environ.get("ENVIRONMENT", "docker"),
     "status": overall,
     "components": components,
+    "config": {
+      "frontendPort": os.environ.get("FRONTEND_PORT", "3000").strip() or "3000",
+      "timingLogs": _timing_enabled(),
+      "cors": {
+        "allowOrigins": cors_origins,
+        "originRegex": cors_origin_regex,
+        "allowCredentials": cors_allow_credentials,
+      },
+      "es": {
+        "url": _sanitize_url(ES_URL),
+        "index": ES_INDEX,
+        "timeoutSec": ES_TIMEOUT,
+        "bm25Weight": ES_BM25_WEIGHT,
+        "knnWeight": ES_KNN_WEIGHT,
+        "embeddingDim": EMBEDDING_DIM,
+      },
+      "embedding": {
+        "apiUrl": _sanitize_url(EMBEDDING_API_URL),
+        "timeoutSec": EMBEDDING_TIMEOUT,
+        "strict": EMBEDDING_STRICT,
+      },
+      "remote": {
+        "base": _sanitize_url(REMOTE_CONTEXT8_BASE),
+        "configured": bool(REMOTE_CONTEXT8_BASE and REMOTE_CONTEXT8_API_KEY),
+        "allowOverride": REMOTE_CONTEXT8_ALLOW_OVERRIDE,
+        "timeoutSec": REMOTE_CONTEXT8_TIMEOUT,
+        "allowedHosts": sorted(REMOTE_CONTEXT8_ALLOWED_HOSTS),
+      },
+      "timeouts": {
+        "searchEsSec": SEARCH_ES_TIMEOUT,
+        "searchEmbedSec": SEARCH_EMBED_TIMEOUT,
+        "statusSec": STATUS_TIMEOUT,
+        "statusRemoteSec": STATUS_REMOTE_TIMEOUT,
+        "statusEmbedSec": STATUS_EMBED_TIMEOUT,
+      },
+    },
     "queueLengths": {"embedding": None, "es_sync": None},
   }
 

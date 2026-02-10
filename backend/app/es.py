@@ -53,6 +53,20 @@ def build_es_mapping(include_embedding: bool) -> dict[str, Any]:
         }
     return {"mappings": {"properties": properties}}
 
+def _extract_index_properties(mapping: dict[str, Any]) -> dict[str, Any]:
+    if not mapping:
+        return {}
+    payload = mapping.get(ES_INDEX)
+    if payload is None:
+        payload = next(iter(mapping.values()), None)
+    if not isinstance(payload, dict):
+        return {}
+    mappings = payload.get("mappings") or {}
+    if not isinstance(mappings, dict):
+        return {}
+    props = mappings.get("properties") or {}
+    return props if isinstance(props, dict) else {}
+
 
 def _auth() -> Optional[tuple[str, str]]:
     if ES_USERNAME and ES_PASSWORD:
@@ -273,6 +287,31 @@ async def ensure_es_index() -> None:
     async with httpx.AsyncClient(timeout=ES_TIMEOUT, auth=_auth()) as client:
         head = await client.head(f"{ES_URL}/{ES_INDEX}")
         if head.status_code == 200:
+            if not include_embedding:
+                return
+            mapping_resp = await client.get(f"{ES_URL}/{ES_INDEX}/_mapping")
+            mapping_resp.raise_for_status()
+            props = _extract_index_properties(mapping_resp.json())
+            embedding_prop = props.get("embedding")
+            if embedding_prop is None:
+                desired = build_es_mapping(True)["mappings"]["properties"]["embedding"]
+                put_resp = await client.put(
+                    f"{ES_URL}/{ES_INDEX}/_mapping",
+                    json={"properties": {"embedding": desired}},
+                )
+                put_resp.raise_for_status()
+                return
+
+            if isinstance(embedding_prop, dict):
+                try:
+                    dims = int(embedding_prop.get("dims"))
+                    if dims != EMBEDDING_DIM:
+                        print(
+                            f"[es] embedding dims mismatch: index={ES_INDEX} "
+                            f"mapping_dims={dims} env_dims={EMBEDDING_DIM}"
+                        )
+                except Exception:
+                    pass
             return
         if head.status_code != 404:
             head.raise_for_status()
