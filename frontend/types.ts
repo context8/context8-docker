@@ -77,3 +77,90 @@ export interface SearchResult {
   voteScore?: number;
   source?: SearchSource;
 }
+
+export type SystemComponentStatus = 'ok' | 'error' | 'disabled';
+
+export interface StatusComponentBase {
+  status: SystemComponentStatus;
+  detail?: string;
+}
+
+export interface StatusDbComponent extends StatusComponentBase {}
+
+export interface StatusEsComponent extends StatusComponentBase {
+  cluster?: string;
+  version?: string;
+  index?: string;
+  indexExists?: boolean;
+}
+
+export interface StatusRemoteComponent extends StatusComponentBase {
+  base?: string;
+  total?: number;
+}
+
+export interface StatusEmbeddingComponent extends StatusComponentBase {
+  healthUrl?: string;
+  payload?: unknown;
+}
+
+export interface StatusConfig {
+  frontendPort?: string;
+  timingLogs?: boolean;
+  cors?: {
+    allowOrigins?: string[];
+    originRegex?: string | null;
+    allowCredentials?: boolean;
+  };
+  es?: {
+    url?: string | null;
+    index?: string;
+    timeoutSec?: number;
+    bm25Weight?: number;
+    knnWeight?: number;
+    embeddingDim?: number;
+  };
+  embedding?: {
+    apiUrl?: string | null;
+    timeoutSec?: number;
+    strict?: boolean;
+  };
+  remote?: {
+    base?: string | null;
+    configured?: boolean;
+    allowOverride?: boolean;
+    timeoutSec?: number;
+    allowedHosts?: string[];
+  };
+  timeouts?: {
+    searchEsSec?: number;
+    searchEmbedSec?: number;
+    statusSec?: number;
+    statusRemoteSec?: number;
+    statusEmbedSec?: number;
+  };
+}
+
+export interface StatusResponse {
+  updatedAt: string;
+  uptimeSec: number;
+  version: string;
+  environment: string;
+  status: string;
+  components: {
+    db?: StatusDbComponent;
+    es?: StatusEsComponent;
+    remote?: StatusRemoteComponent;
+    embedding?: StatusEmbeddingComponent;
+    [key: string]: StatusComponentBase | undefined;
+  };
+  config?: StatusConfig;
+  queueLengths?: Record<string, number | null>;
+}
+
+export interface StatusSummaryResponse {
+  page: string;
+  status: string;
+  components: StatusResponse['components'];
+  updatedAt: string;
+}

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Key, FileText, Search } from 'lucide-react';
+import { Key, FileText, Search, SlidersHorizontal } from 'lucide-react';
 import { ApiKeysView } from '@/pages/Dashboard/views/ApiKeysView';
 import { SolutionsView } from '@/pages/Dashboard/views/SolutionsView';
 import { SearchView } from '@/pages/Dashboard/views/SearchView';
+import { SettingsView } from '@/pages/Dashboard/views/SettingsView';
 import type { ThemeMode } from '@/types';
 
-export type DashboardView = 'apikeys' | 'solutions' | 'search';
+export type DashboardView = 'apikeys' | 'solutions' | 'search' | 'settings';
 
 export interface SessionState {
   session: { token: string; email: string } | null;
@@ -41,6 +42,7 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
     { id: 'apikeys', label: 'API Keys', icon: <Key size={18} /> },
     { id: 'solutions', label: 'Solutions', icon: <FileText size={18} /> },
     { id: 'search', label: 'Search', icon: <Search size={18} /> },
+    { id: 'settings', label: 'Settings', icon: <SlidersHorizontal size={18} /> },
   ];
 
   const tabButtonClass = (isActive: boolean) => `
@@ -93,6 +95,11 @@ export const DashboardContainer: React.FC<DashboardContainerProps> = ({
             <SearchView
               token={token}
               apiKey={apiKey}
+              theme={theme}
+            />
+          )}
+          {currentView === 'settings' && (
+            <SettingsView
               theme={theme}
             />
           )}
