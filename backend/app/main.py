@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import time
@@ -7,9 +8,10 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, text
+import httpx
 from .database import get_session
-from .models import Solution
+from .models import Solution, SolutionVote
 from .schemas import (
   SolutionCreate,
   SolutionOut,
@@ -28,9 +30,7 @@ from .crud import (
   create_solution,
   get_solution,
   list_solutions,
-  delete_solution,
   count_accessible_solutions,
-  update_solution_visibility,
   get_solution_vote,
   set_solution_vote,
   clear_solution_vote,
@@ -42,8 +42,10 @@ from .es import (
   update_solution_es,
   delete_solution_es,
   ensure_es_index,
+  ES_URL,
+  ES_INDEX,
 )
-from .embeddings import embed_text
+from .embeddings import embed_text, EMBEDDING_API_URL
 from .api_keys import (
   router as apikey_router,
   resolve_api_keys,
@@ -54,7 +56,13 @@ from .api_keys import (
 from jose import jwt
 from .config import JWT_SECRET, JWT_ALG
 from .visibility import VISIBILITY_PRIVATE, normalize_visibility
-from .remote import resolve_remote_config, remote_search
+from .remote import (
+  resolve_remote_config,
+  remote_search,
+  REMOTE_CONTEXT8_BASE,
+  REMOTE_CONTEXT8_API_KEY,
+)
+from .es_docs import solution_to_es_doc
 from .auth import (
     SessionResponse,
     UserResponse,
@@ -68,6 +76,7 @@ from .auth import (
 from fastapi import APIRouter
 
 app = FastAPI(title="Context8 Cloud API", version="1.0.0")
+APP_STARTED_AT = time.time()
 
 def _parse_csv_env(name: str) -> list[str] | None:
   raw = os.environ.get(name)
@@ -77,9 +86,22 @@ def _parse_csv_env(name: str) -> list[str] | None:
   return items or None
 
 
-cors_origins = _parse_csv_env("CORS_ALLOW_ORIGINS") or ["*"]
+def _default_cors_origins() -> list[str]:
+  frontend_port = os.environ.get("FRONTEND_PORT", "3000").strip() or "3000"
+  default_origins = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    f"http://localhost:{frontend_port}",
+    f"http://127.0.0.1:{frontend_port}",
+  }
+  return sorted(default_origins)
+
+
+cors_origins = _parse_csv_env("CORS_ALLOW_ORIGINS") or _default_cors_origins()
 cors_origin_regex = os.environ.get("CORS_ALLOW_ORIGIN_REGEX")
 cors_allow_credentials = os.environ.get("CORS_ALLOW_CREDENTIALS", "").lower() in ("1", "true", "yes")
+if cors_allow_credentials and "*" in cors_origins:
+  raise RuntimeError("CORS_ALLOW_CREDENTIALS=true cannot be used with wildcard CORS origins")
 
 app.add_middleware(
   CORSMiddleware,
@@ -92,6 +114,9 @@ app.add_middleware(
 
 SEARCH_ES_TIMEOUT = float(os.environ.get("SEARCH_ES_TIMEOUT", "3"))
 SEARCH_EMBED_TIMEOUT = float(os.environ.get("SEARCH_EMBED_TIMEOUT", "4"))
+STATUS_TIMEOUT = float(os.environ.get("STATUS_TIMEOUT", "2.5"))
+STATUS_REMOTE_TIMEOUT = float(os.environ.get("STATUS_REMOTE_TIMEOUT", "3"))
+STATUS_EMBED_TIMEOUT = float(os.environ.get("STATUS_EMBED_TIMEOUT", "2.5"))
 
 def _knn_enabled() -> bool:
   try:
@@ -141,6 +166,10 @@ async def _enforce_api_key_limits(db: AsyncSession, key_scope: KeyScope) -> None
   monthly_limit = key_scope.monthly_limit
   if daily_limit is None and monthly_limit is None:
     return
+
+  lock_hash = hashlib.sha256(key_scope.api_key_id.encode("utf-8")).digest()
+  lock_id = int.from_bytes(lock_hash[:8], "big", signed=True)
+  await db.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
 
   now = datetime.now(timezone.utc)
   if daily_limit is not None:
@@ -416,6 +445,157 @@ async def login_account(
 app.include_router(apikey_router)
 app.include_router(auth_router)
 
+
+def _build_solution_list_items(items: list[Solution]) -> list[SolutionListItem]:
+  return [
+    SolutionListItem(
+      id=i.id,
+      title=i.title,
+      errorMessage=i.error_message,
+      errorType=i.error_type,
+      tags=i.tags,
+      conversationLanguage=i.conversation_language,
+      programmingLanguage=i.programming_language,
+      vibecodingSoftware=i.vibecoding_software,
+      visibility=i.visibility,
+      upvotes=i.upvotes,
+      downvotes=i.downvotes,
+      voteScore=(i.upvotes or 0) - (i.downvotes or 0),
+      createdAt=i.created_at,
+    )
+    for i in items
+  ]
+
+
+async def _list_user_solutions_page(
+  db: AsyncSession,
+  scope: dict,
+  limit: int,
+  offset: int,
+  visibility: str | None,
+) -> PaginatedSolutions:
+  try:
+    visibility_filter = normalize_visibility(visibility) if visibility else None
+  except ValueError as exc:
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+  total, items = await list_solutions(
+    db,
+    scope["api_key_ids"],
+    scope["allow_team"],
+    scope.get("allow_admin", False),
+    limit,
+    offset,
+    visibility_filter,
+  )
+  payload_items = _build_solution_list_items(items)
+  return PaginatedSolutions(items=payload_items, total=total, limit=limit, offset=offset)
+
+
+async def _collect_status(db: AsyncSession) -> dict:
+  components: dict[str, dict] = {}
+  overall = "ok"
+
+  try:
+    await db.execute(select(1))
+    components["db"] = {"status": "ok"}
+  except Exception as exc:
+    components["db"] = {"status": "error", "detail": str(exc)}
+    overall = "degraded"
+
+  if ES_URL:
+    es_auth = None
+    es_username = os.environ.get("ES_USERNAME")
+    es_password = os.environ.get("ES_PASSWORD")
+    if es_username and es_password:
+      es_auth = (es_username, es_password)
+    try:
+      async with httpx.AsyncClient(timeout=STATUS_TIMEOUT, auth=es_auth) as client:
+        resp = await client.get(f"{ES_URL}")
+        resp.raise_for_status()
+        data = resp.json()
+        index_exists = False
+        try:
+          idx_resp = await client.head(f"{ES_URL}/{ES_INDEX}")
+          index_exists = idx_resp.status_code == 200
+        except Exception:
+          index_exists = False
+        components["es"] = {
+          "status": "ok",
+          "cluster": data.get("tagline"),
+          "version": ((data.get("version") or {}).get("number")),
+          "index": ES_INDEX,
+          "indexExists": index_exists,
+        }
+    except Exception as exc:
+      components["es"] = {"status": "error", "detail": str(exc), "index": ES_INDEX}
+      overall = "degraded"
+  else:
+    components["es"] = {"status": "disabled", "detail": "ES_URL not configured"}
+
+  if REMOTE_CONTEXT8_BASE and REMOTE_CONTEXT8_API_KEY:
+    try:
+      async with httpx.AsyncClient(timeout=STATUS_REMOTE_TIMEOUT) as client:
+        resp = await client.get(
+          f"{REMOTE_CONTEXT8_BASE.rstrip('/')}/solutions/count",
+          headers={"X-API-Key": REMOTE_CONTEXT8_API_KEY},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        components["remote"] = {"status": "ok", "base": REMOTE_CONTEXT8_BASE, "total": data.get("total")}
+    except Exception as exc:
+      components["remote"] = {"status": "error", "base": REMOTE_CONTEXT8_BASE, "detail": str(exc)}
+      overall = "degraded"
+  else:
+    components["remote"] = {"status": "disabled"}
+
+  if _knn_enabled():
+    health_url = os.environ.get("EMBEDDING_HEALTH_URL")
+    if not health_url and EMBEDDING_API_URL:
+      health_url = EMBEDDING_API_URL.replace("/embed", "/health")
+    if not health_url:
+      components["embedding"] = {"status": "error", "detail": "kNN enabled but embedding endpoint is not configured"}
+      overall = "degraded"
+    else:
+      try:
+        async with httpx.AsyncClient(timeout=STATUS_EMBED_TIMEOUT) as client:
+          resp = await client.get(health_url)
+          resp.raise_for_status()
+          payload = resp.json() if resp.text else {}
+          components["embedding"] = {"status": "ok", "healthUrl": health_url, "payload": payload}
+      except Exception as exc:
+        components["embedding"] = {"status": "error", "healthUrl": health_url, "detail": str(exc)}
+        overall = "degraded"
+  else:
+    components["embedding"] = {"status": "disabled", "detail": "ES_KNN_WEIGHT <= 0"}
+
+  return {
+    "updatedAt": datetime.now(timezone.utc).isoformat(),
+    "uptimeSec": max(0, int(time.time() - APP_STARTED_AT)),
+    "version": app.version,
+    "environment": os.environ.get("ENVIRONMENT", "docker"),
+    "status": overall,
+    "components": components,
+    "queueLengths": {"embedding": None, "es_sync": None},
+  }
+
+
+@app.get("/status")
+async def get_status(db: AsyncSession = Depends(get_session)):
+  return await _collect_status(db)
+
+
+@app.get("/status/summary")
+async def get_status_summary(db: AsyncSession = Depends(get_session)):
+  status_payload = await _collect_status(db)
+  return {
+    "page": "Context8 Docker API",
+    "status": status_payload["status"],
+    "components": status_payload["components"],
+    "updatedAt": status_payload["updatedAt"],
+  }
+
+
 @app.on_event("startup")
 async def on_startup():
   try:
@@ -478,30 +658,7 @@ async def save_solution(
 
   es_start = time.perf_counter()
   try:
-    doc: dict = {
-      "id": sol.id,
-      "user_id": sol.user_id,
-      "api_key_id": sol.api_key_id,
-      "title": sol.title,
-      "error_message": sol.error_message,
-      "error_type": sol.error_type,
-      "context": sol.context,
-      "root_cause": sol.root_cause,
-      "solution": sol.solution,
-      "code_changes": sol.code_changes,
-      "tags": sol.tags or [],
-      "conversation_language": sol.conversation_language,
-      "programming_language": sol.programming_language,
-      "vibecoding_software": sol.vibecoding_software,
-      "project_path": sol.project_path,
-      "environment": sol.environment,
-      "visibility": sol.visibility,
-      "upvotes": int(sol.upvotes or 0),
-      "downvotes": int(sol.downvotes or 0),
-      "created_at": sol.created_at.isoformat() if sol.created_at else None,
-    }
-    if embedding is not None:
-      doc["embedding"] = embedding
+    doc = solution_to_es_doc(sol, embedding)
     await index_solution_es(sol.id, doc)
   except Exception as exc:
     # Elasticsearch is the only search source in docker-light; avoid persisting unsearchable rows.
@@ -556,47 +713,35 @@ async def list_user_solutions(
   db: AsyncSession = Depends(get_session),
   scope: dict = Depends(require_solution_read_scope),
 ):
-  try:
-    visibility_filter = normalize_visibility(visibility) if visibility else None
-  except ValueError as exc:
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-  total, items = await list_solutions(
-    db,
-    scope["api_key_ids"],
-    scope["allow_team"],
-    scope.get("allow_admin", False),
-    limit,
-    offset,
-    visibility_filter,
-  )
-  payload_items = [
-    SolutionListItem(
-      id=i.id,
-      title=i.title,
-      errorMessage=i.error_message,
-      errorType=i.error_type,
-      tags=i.tags,
-      conversationLanguage=i.conversation_language,
-      programmingLanguage=i.programming_language,
-      vibecodingSoftware=i.vibecoding_software,
-      visibility=i.visibility,
-      upvotes=i.upvotes,
-      downvotes=i.downvotes,
-      voteScore=(i.upvotes or 0) - (i.downvotes or 0),
-      createdAt=i.created_at,
-    )
-    for i in items
-  ]
+  payload = await _list_user_solutions_page(db, scope, limit, offset, visibility)
 
   if scope.get("auth_source") == "api_key":
-    return payload_items
+    return payload.items
 
-  return PaginatedSolutions(
-    items=payload_items,
-    total=total,
-    limit=limit,
-    offset=offset,
-  )
+  return payload
+
+
+@app.get("/v2/solutions", response_model=PaginatedSolutions)
+async def list_user_solutions_v2(
+  limit: int = 25,
+  offset: int = 0,
+  visibility: str | None = None,
+  db: AsyncSession = Depends(get_session),
+  scope: dict = Depends(require_solution_read_scope),
+):
+  return await _list_user_solutions_page(db, scope, limit, offset, visibility)
+
+
+@app.get("/mcp/solutions", response_model=list[SolutionListItem])
+async def list_user_solutions_mcp(
+  limit: int = 25,
+  offset: int = 0,
+  visibility: str | None = None,
+  db: AsyncSession = Depends(get_session),
+  scope: dict = Depends(require_solution_read_scope),
+):
+  payload = await _list_user_solutions_page(db, scope, limit, offset, visibility)
+  return payload.items
 
 
 @app.get("/solutions/count", response_model=CountResponse)
@@ -790,16 +935,46 @@ async def delete_user_solution(
 ):
   api_key_ids = scope.get("api_key_ids", [])
   start = time.perf_counter()
-  deleted = await delete_solution(db, solution_id, api_key_ids, scope.get("allow_admin", False))
-  db_ms = (time.perf_counter() - start) * 1000
-  if not deleted:
+  if not api_key_ids and not scope.get("allow_admin", False):
     raise HTTPException(status_code=404, detail="Not found")
+
+  if scope.get("allow_admin", False):
+    res = await db.execute(select(Solution).where(Solution.id == solution_id))
+  else:
+    res = await db.execute(
+      select(Solution).where(Solution.id == solution_id, Solution.api_key_id.in_(api_key_ids))
+    )
+  sol = res.scalar_one_or_none()
+  if not sol:
+    raise HTTPException(status_code=404, detail="Not found")
+
   es_start = time.perf_counter()
   try:
     await delete_solution_es(solution_id)
   except Exception as exc:
-    print(f"es delete failed for {solution_id}: {exc}")
+    raise HTTPException(status_code=502, detail=f"Failed to delete solution from Elasticsearch: {exc}") from exc
   es_ms = (time.perf_counter() - es_start) * 1000
+
+  db_start = time.perf_counter()
+  try:
+    await db.execute(delete(SolutionVote).where(SolutionVote.solution_id == sol.id))
+    await db.delete(sol)
+    await db.commit()
+  except Exception as exc:
+    await db.rollback()
+    try:
+      await index_solution_es(sol.id, solution_to_es_doc(sol))
+    except Exception as reindex_exc:
+      raise HTTPException(
+        status_code=500,
+        detail=f"Database delete failed after ES delete ({exc}); ES rollback also failed ({reindex_exc})",
+      ) from exc
+    raise HTTPException(
+      status_code=500,
+      detail=f"Database delete failed after ES delete ({exc}); ES rollback restored",
+    ) from exc
+
+  db_ms = (time.perf_counter() - db_start) * 1000
   total_ms = (time.perf_counter() - start) * 1000
   print(f"timing:delete_solution id={solution_id} db_ms={db_ms:.2f} es_ms={es_ms:.2f} total_ms={total_ms:.2f}")
   return {"status": "deleted"}
@@ -813,23 +988,54 @@ async def set_solution_visibility(
   scope: dict = Depends(require_solution_write_scope),
 ):
   api_key_ids = scope.get("api_key_ids", [])
+  allow_admin = scope.get("allow_admin", False)
   try:
     visibility = normalize_visibility(payload.visibility) or VISIBILITY_PRIVATE
   except ValueError as exc:
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-  sol = await update_solution_visibility(
-    db,
-    solution_id,
-    api_key_ids,
-    visibility,
-    scope.get("allow_admin", False),
-  )
+
+  if not api_key_ids and not allow_admin:
+    raise HTTPException(status_code=404, detail="Not found")
+  if allow_admin:
+    res = await db.execute(select(Solution).where(Solution.id == solution_id))
+  else:
+    res = await db.execute(
+      select(Solution).where(Solution.id == solution_id, Solution.api_key_id.in_(api_key_ids))
+    )
+  sol = res.scalar_one_or_none()
   if not sol:
     raise HTTPException(status_code=404, detail="Not found")
+
+  old_visibility = sol.visibility
+  if old_visibility == visibility:
+    return SolutionVisibilityOut(id=sol.id, visibility=sol.visibility)
+
   try:
-    await update_solution_es(sol.id, {"visibility": sol.visibility})
+    await update_solution_es(sol.id, {"visibility": visibility})
   except Exception as exc:
-    print(f"es visibility sync failed for {sol.id}: {exc}")
+    raise HTTPException(status_code=502, detail=f"Failed to update visibility in Elasticsearch: {exc}") from exc
+
+  sol.visibility = visibility
+  try:
+    await db.commit()
+    await db.refresh(sol)
+  except Exception as exc:
+    await db.rollback()
+    try:
+      await update_solution_es(sol.id, {"visibility": old_visibility})
+    except Exception as rollback_exc:
+      raise HTTPException(
+        status_code=500,
+        detail=(
+          f"Database visibility update failed after ES update ({exc}); "
+          f"ES rollback also failed ({rollback_exc})"
+        ),
+      ) from exc
+    raise HTTPException(
+      status_code=500,
+      detail=f"Database visibility update failed after ES update ({exc}); ES rollback restored",
+    ) from exc
+
   return SolutionVisibilityOut(id=sol.id, visibility=sol.visibility)
 
 

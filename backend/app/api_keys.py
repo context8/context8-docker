@@ -11,7 +11,8 @@ from sqlalchemy import Column, String, DateTime, Boolean, Integer
 from .auth import require_admin_user
 from .users import User
 from .models import Solution, SolutionVote
-from .es import delete_solution_es
+from .es import delete_solution_es, index_solution_es
+from .es_docs import solution_to_es_doc
 from .schemas import (
     ApiKeyCreate,
     ApiKeyLimitsUpdate,
@@ -75,15 +76,57 @@ async def _cleanup_solutions_for_key(db: AsyncSession, key_id: str) -> None:
     if not items:
         return
 
-    solution_ids = [item.id for item in items]
-    await db.execute(delete(SolutionVote).where(SolutionVote.solution_id.in_(solution_ids)))
-    await db.execute(delete(Solution).where(Solution.id.in_(solution_ids)))
-    await db.commit()
-    for sol_id in solution_ids:
+    es_deleted_docs: list[tuple[str, dict]] = []
+    for item in items:
+        doc = solution_to_es_doc(item)
         try:
-            await delete_solution_es(sol_id)
+            await delete_solution_es(item.id)
         except Exception as exc:
-            print(f"[apikeys] es delete failed for {sol_id}: {exc}")
+            rollback_errors: list[str] = []
+            for rollback_id, rollback_doc in es_deleted_docs:
+                try:
+                    await index_solution_es(rollback_id, rollback_doc)
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"{rollback_id}: {rollback_exc}")
+            if rollback_errors:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Failed to delete ES docs during API key cleanup "
+                        f"({item.id}: {exc}); ES rollback failed for {', '.join(rollback_errors)}"
+                    ),
+                ) from exc
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to delete ES docs during API key cleanup ({item.id}: {exc})",
+            ) from exc
+        es_deleted_docs.append((item.id, doc))
+
+    solution_ids = [item.id for item in items]
+    try:
+        await db.execute(delete(SolutionVote).where(SolutionVote.solution_id.in_(solution_ids)))
+        await db.execute(delete(Solution).where(Solution.id.in_(solution_ids)))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        rollback_errors: list[str] = []
+        for rollback_id, rollback_doc in es_deleted_docs:
+            try:
+                await index_solution_es(rollback_id, rollback_doc)
+            except Exception as rollback_exc:
+                rollback_errors.append(f"{rollback_id}: {rollback_exc}")
+        if rollback_errors:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Failed to remove DB rows during API key cleanup "
+                    f"({exc}); ES rollback failed for {', '.join(rollback_errors)}"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to remove DB rows during API key cleanup ({exc}); ES rollback restored",
+        ) from exc
 
 
 def _normalize_permissions(can_read: bool | None, can_write: bool | None) -> tuple[bool, bool]:
@@ -352,9 +395,9 @@ async def revoke_api_key(key_id: str, db: AsyncSession = Depends(get_session), a
     item = res.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    await _cleanup_solutions_for_key(db, key_id)
     item.revoked = True
     await db.commit()
-    await _cleanup_solutions_for_key(db, key_id)
     return {"status": "revoked"}
 
 

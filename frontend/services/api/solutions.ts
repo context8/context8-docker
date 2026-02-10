@@ -48,22 +48,11 @@ export const solutionsService = {
     if (visibility) {
       params.set('visibility', visibility);
     }
-    const data = await request<PaginatedResponse<Solution> | Solution[]>(
-      `/solutions?${params.toString()}`,
+    return request<PaginatedResponse<Solution>>(
+      `/v2/solutions?${params.toString()}`,
       { method: 'GET' },
       auth
     );
-
-    if (Array.isArray(data)) {
-      return {
-        items: data,
-        total: data.length,
-        limit,
-        offset,
-      };
-    }
-
-    return data;
   },
 
   async get(auth: AuthOptions, id: string): Promise<Solution> {
