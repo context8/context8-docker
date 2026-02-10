@@ -8,7 +8,8 @@
 - `API_KEY_SECRET`：用户 API Key 派生密钥。
 - 可选：`API_KEY` 旧版全局 key（不推荐生产）。
 - 可选：`ES_URL`/`ES_INDEX`/`ES_KNN_WEIGHT`/`ES_BM25_WEIGHT` 控制检索；`EMBEDDING_API_URL`/`EMBEDDING_DIM` 控制向量维度。
-- 可选：`REMOTE_CONTEXT8_BASE` / `REMOTE_CONTEXT8_API_KEY` / `REMOTE_CONTEXT8_ALLOW_OVERRIDE` 用于远程互联搜索。
+- 可选：`REMOTE_CONTEXT8_BASE` / `REMOTE_CONTEXT8_API_KEY` / `REMOTE_CONTEXT8_ALLOW_OVERRIDE` / `REMOTE_CONTEXT8_ALLOWED_HOSTS` 用于远程互联搜索。
+- 可选：`CORS_ALLOW_ORIGINS` / `CORS_ALLOW_ORIGIN_REGEX` / `CORS_ALLOW_CREDENTIALS` 配置跨域；默认仅允许 localhost 前端端口。
 
 ## 初始化
 ```bash
@@ -17,8 +18,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 export DATABASE_URL="postgresql+asyncpg://user:pass@host:5432/context8"
-export JWT_SECRET="replace_me"
-export API_KEY_SECRET="replace_me"
+export JWT_SECRET="<strong-random-secret>"
+export API_KEY_SECRET="<strong-random-secret>"
 
 # 迁移（需要 citext 权限）
 alembic upgrade head
@@ -129,8 +130,15 @@ curl -X DELETE http://localhost:8000/apikeys/<parentId>/subkeys/<subId> \
     -H "X-API-Key: <apiKey>"
   ```
 
-注意：为了兼容 Context8 MCP，使用 `X-API-Key` 访问 `GET /solutions` 时返回数组；
-管理员 JWT 访问时返回分页对象 `{items,total,limit,offset}`。
+列表接口契约：
+- `GET /v2/solutions`：统一分页 `{items,total,limit,offset}`（推荐）。
+- `GET /solutions`：兼容路由（`X-API-Key` 返回数组；JWT 返回分页）。
+- `GET /mcp/solutions`：固定返回数组（兼容 MCP）。
+
+健康接口：
+- `GET /status`：系统健康（DB/ES/Remote）+ `updatedAt/uptimeSec/version/environment`。
+- `GET /status/summary`：状态摘要页。
+- 当 `ES_KNN_WEIGHT>0` 时，`/status` 会额外检查 embedding 组件健康（可用 `EMBEDDING_HEALTH_URL` 覆盖探活地址）。
 
 ## 其他
 - 迁移脚本 `alembic/versions/da16b97d5c07_add_email_verification_system.py` 幂等建表/扩展，EMBEDDING_DIM 取 env 或默认 384。

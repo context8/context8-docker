@@ -5,12 +5,12 @@ services:
     environment:
       POSTGRES_DB: context8
       POSTGRES_USER: context8
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U context8"]
       interval: 10s
@@ -33,7 +33,7 @@ services:
         soft: -1
         hard: -1
     ports:
-      - "${ES_PORT:-9200}:9200"
+      - "${ES_BIND:-127.0.0.1}:${ES_PORT:-9200}:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     networks:
@@ -63,16 +63,27 @@ services:
       elasticsearch:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:-changeme}@postgres:5432/context8
+      DATABASE_URL: postgresql+asyncpg://context8:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/context8
       ES_URL: ${ES_URL:-http://elasticsearch:9200}
       ES_INDEX: ${ES_INDEX:-solutions}
       ES_KNN_WEIGHT: ${ES_KNN_WEIGHT:-0}
       ES_BM25_WEIGHT: ${ES_BM25_WEIGHT:-1}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-http://embedding:8001/embed}
+      FRONTEND_PORT: ${FRONTEND_PORT:-3000}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
+      CORS_ALLOW_ORIGIN_REGEX: ${CORS_ALLOW_ORIGIN_REGEX:-}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      API_KEY_SECRET: ${API_KEY_SECRET:?API_KEY_SECRET is required}
       REMOTE_CONTEXT8_BASE: ${REMOTE_CONTEXT8_BASE:-}
       REMOTE_CONTEXT8_API_KEY: ${REMOTE_CONTEXT8_API_KEY:-}
-      REMOTE_CONTEXT8_ALLOW_OVERRIDE: ${REMOTE_CONTEXT8_ALLOW_OVERRIDE:-true}
+      REMOTE_CONTEXT8_ALLOW_OVERRIDE: ${REMOTE_CONTEXT8_ALLOW_OVERRIDE:-false}
+      REMOTE_CONTEXT8_ALLOWED_HOSTS: ${REMOTE_CONTEXT8_ALLOWED_HOSTS:-}
       REMOTE_CONTEXT8_TIMEOUT: ${REMOTE_CONTEXT8_TIMEOUT:-6}
+    ulimits:
+      nofile:
+        soft: ${API_NOFILE_SOFT:-65536}
+        hard: ${API_NOFILE_HARD:-65536}
     command: >
       /bin/sh -c "python local_server.py --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-1}"
     ports:
@@ -83,7 +94,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/status/summary"]
       interval: 30s
       timeout: 10s
       retries: 3

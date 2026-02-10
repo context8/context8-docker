@@ -40,6 +40,12 @@ docker compose up -d --build
 - `API_KEY_SECRET`
 - `VITE_API_BASE`（前端访问后端的地址）
 
+安全默认值：
+- `POSTGRES` 与 `ES` 默认只绑定到 `127.0.0.1`（通过 `POSTGRES_BIND` / `ES_BIND` 可调整）。
+- `JWT_SECRET` / `API_KEY_SECRET` 不能使用占位值（如 `replace_me` / `changeme`）。
+- CORS 默认仅放行本机前端地址（`localhost/127.0.0.1 + FRONTEND_PORT`）；如需跨域请显式设置 `CORS_ALLOW_ORIGINS`。
+- API 容器默认 `nofile=65536`（`API_NOFILE_SOFT/HARD` 可调）。
+
 如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
 
 ## 远程互联（可选）
@@ -49,10 +55,22 @@ docker compose up -d --build
 ```
 REMOTE_CONTEXT8_BASE=https://your-context8.example.com
 REMOTE_CONTEXT8_API_KEY=...
-REMOTE_CONTEXT8_ALLOW_OVERRIDE=true
+REMOTE_CONTEXT8_ALLOW_OVERRIDE=false
+# 可选：允许请求头覆盖的 host 白名单（逗号分隔）
+REMOTE_CONTEXT8_ALLOWED_HOSTS=api.context8.org,localhost
 ```
 
 调用 `/search` 时传 `source=remote` 或 `source=all`，即可走远程或本地+远程聚合搜索。
+说明：若配置了 `REMOTE_CONTEXT8_ALLOWED_HOSTS`，无论是固定远端还是请求头覆盖，host 都必须命中白名单。
+
+## API 契约（列表）
+- `GET /v2/solutions`：统一分页返回 `{items,total,limit,offset}`（推荐前端/新客户端使用）。
+- `GET /solutions`：兼容路由（API Key 仍返回数组，JWT 返回分页对象）。
+- `GET /mcp/solutions`：稳定数组返回，供 MCP/兼容客户端使用。
+
+## 健康检查
+- `GET /status`：返回 `db/es/remote` 组件状态、版本、运行时长。
+- `GET /status/summary`：状态页摘要。
 
 ## 常用命令
 
