@@ -1,86 +1,149 @@
 # Context8 Docker (Private + Team)
 
-全套内网部署：前端 + 后端 + ES + Postgres（可选 Embedding）。首次访问需设置管理员账号与密码，默认关闭邮件验证，只有私有和团队可见性。
+English | [简体中文](README.zh-CN.md)
+
+All-in-one self-hosted deployment for teams: Dashboard + API + Elasticsearch + Postgres (optional Embedding).
+
+This Docker edition is intentionally simple and predictable:
+- Elasticsearch is the only search source (`/search` never falls back to the database).
+- Writes are synchronous: the API writes Postgres, then indexes Elasticsearch in the same request path.
+- Optional semantic search is enabled via ES kNN and an embedding service.
+- Optional federated search can query a remote Context8 server using an API key.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  U["User/Client"] -->|HTTP| FE["frontend (Nginx static)"]
+  FE -->|API calls| API["api (FastAPI)"]
+
+  API -->|auth/keys/solutions| PG["postgres (source of truth)"]
+  API -->|index & search| ES["elasticsearch (only search source)"]
+
+  API -. "if ES_KNN_WEIGHT>0\nembed before index/search" .-> EMB["embedding (optional)"]
+  API -. "if source=remote/all\nfederated search" .-> REM["remote Context8 server"]
+```
+
+Services in `docker-compose.yml`:
+- `frontend`: Vite build + Nginx static site (admin dashboard).
+- `api`: FastAPI + Alembic migrations; enforces auth, permissions, quotas, ES-only search, and federation.
+- `postgres`: durable data store (users, API keys/subkeys, solutions, votes).
+- `elasticsearch`: the only search backend.
+- `embedding` (profile `semantic`): sentence-transformers service used for kNN.
 
 ## Quick Start
 
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
+1. Create your `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Set required secrets in `.env`:
+   - `POSTGRES_PASSWORD`
+   - `JWT_SECRET`
+   - `API_KEY_SECRET`
+   - `VITE_API_BASE` (the browser-reachable API base, e.g. `http://localhost:8000`)
 
-访问：
-- 前端：`http://<host>:3000`
-- 后端：`http://<host>:8000/docs`
+   Tip:
+   ```bash
+   openssl rand -hex 32
+   ```
+3. Start:
+   ```bash
+   docker compose up -d --build
+   ```
 
-首次登录：
-- 打开前端登录页，按提示创建管理员账号与密码。
-- 管理员登录后创建 API Key 分发给团队。
+Open:
+- Dashboard: `http://<host>:3000`
+- API docs: `http://<host>:8000/docs`
 
-## 可见性规则
-- `private`: 仅当前 API Key/用户可见
-- `team`: 本部署内所有已认证用户与 API Key 可见
+First-time setup:
+- Open the Dashboard and create the admin account (one-time).
+- Login as admin and mint API keys for your team/services.
 
-## 主要服务
-- `frontend`: Vite + Nginx 静态站点
-- `api`: FastAPI + Postgres（写入时同步更新 ES；搜索只走 ES）
-- `embedding`: sentence-transformers 模型服务（可选；仅在启用 ES kNN 时使用，`docker compose --profile semantic up`）
-- `elasticsearch`: 搜索索引
-- `postgres`: 业务数据库（citext）
+## Visibility Model
 
-## 检索规则（重要）
-- `/search` **只走 Elasticsearch**（无 DB/pgvector 回退）。ES 不可用时会直接报错。
-- `ES_KNN_WEIGHT>0` 时启用向量检索（需要 `embedding` 服务可用且 ES 索引已写入 embedding 字段）；否则只用 BM25。
+This Docker edition supports `private` and `team` (no `public`):
+- `private`: only visible to the API key / user that owns it.
+- `team`: visible to all authenticated users and API keys in the same deployment.
 
-## 配置说明
-`.env` 里至少配置：
-- `POSTGRES_PASSWORD`
-- `DATABASE_SSL`（本地 Postgres 建议 `false`；接云端 PG 可设 `true` 或在 `DATABASE_URL` 里加 `sslmode=require`）
-- `JWT_SECRET`
-- `API_KEY_SECRET`
-- `VITE_API_BASE`（前端访问后端的地址）
+## Search Behavior (Important)
 
-安全默认值：
-- `POSTGRES` 与 `ES` 默认只绑定到 `127.0.0.1`（通过 `POSTGRES_BIND` / `ES_BIND` 可调整）。
-- `JWT_SECRET` / `API_KEY_SECRET` 不能使用占位值（如 `replace_me` / `changeme`）。
-- CORS 默认仅放行本机前端地址（`localhost/127.0.0.1 + FRONTEND_PORT`）；如需跨域请显式设置 `CORS_ALLOW_ORIGINS`。
-- API 容器默认 `nofile=65536`（`API_NOFILE_SOFT/HARD` 可调）。
+- `POST /search` always queries Elasticsearch (no DB/pgvector fallback).
+- When `ES_KNN_WEIGHT > 0`, the API enables ES kNN and calls the embedding service to build vectors.
+- When `ES_KNN_WEIGHT = 0`, search is pure BM25.
 
-如已有同名容器冲突，可在 `.env` 里设置 `CONTEXT8_*_NAME` 覆盖容器名（示例见 `.env.example`）。
+## Semantic Search (Optional)
 
-## 远程互联（可选）
-用于把 Docker 版当作 “互联入口”，查询远程 Context8（主系统或公网部署）。
+1. Enable weights in `.env`:
+   - `ES_KNN_WEIGHT=1`
+   - optional: tune `ES_BM25_WEIGHT`
+2. Start with the `semantic` profile:
+   ```bash
+   docker compose --profile semantic up -d --build
+   ```
 
-在 `.env` 设置：
-```
+Notes:
+- The API will ensure the ES index mapping contains the `embedding` field when kNN is enabled.
+- If you previously created the index without kNN, enabling kNN later is supported (mapping is upgraded in place).
+
+## Federated Search (Optional)
+
+Use this Docker instance as a “federation gateway” to query another Context8 server.
+
+Set in `.env`:
+```env
 REMOTE_CONTEXT8_BASE=https://your-context8.example.com
 REMOTE_CONTEXT8_API_KEY=...
 REMOTE_CONTEXT8_ALLOW_OVERRIDE=false
-# 可选：允许请求头覆盖的 host 白名单（逗号分隔）
 REMOTE_CONTEXT8_ALLOWED_HOSTS=api.context8.org,localhost
 ```
 
-调用 `/search` 时传 `source=remote` 或 `source=all`，即可走远程或本地+远程聚合搜索。
-说明：若配置了 `REMOTE_CONTEXT8_ALLOWED_HOSTS`，无论是固定远端还是请求头覆盖，host 都必须命中白名单。
+Then call `POST /search` with:
+- `source=local` (default): local only
+- `source=remote`: remote only
+- `source=all`: local + remote (results are concatenated and trimmed to `limit`)
 
-## API 契约（列表）
-- `GET /v2/solutions`：统一分页返回 `{items,total,limit,offset}`（推荐前端/新客户端使用）。
-- `GET /solutions`：兼容路由（API Key 仍返回数组，JWT 返回分页对象）。
-- `GET /mcp/solutions`：稳定数组返回，供 MCP/兼容客户端使用。
+Security notes:
+- Header override (`X-Remote-Base` / `X-Remote-Api-Key`) is disabled by default.
+- If enabled, the remote host must match `REMOTE_CONTEXT8_ALLOWED_HOSTS`, otherwise the request is rejected.
 
-## 健康检查
-- `GET /status`：返回 `db/es/remote` 组件状态、版本、运行时长。
-- `GET /status/summary`：状态页摘要。
+## MCP Compatibility / List Contracts
 
-## 常用命令
+Different clients expect different list shapes; this Docker edition keeps stable contracts:
+- `GET /v2/solutions`: paginated `{items,total,limit,offset}` (recommended for new clients).
+- `GET /solutions`: compatibility route (API key returns an array; JWT returns a paginated object).
+- `GET /mcp/solutions`: always returns an array (for MCP and strict array clients).
+
+## Dashboard Settings
+
+The Dashboard includes a `Settings` tab that:
+- shows live `/status` + a sanitized config view (no secrets)
+- generates copyable `.env` snippets for semantic search, federation, and CORS
+
+It does not mutate the running container env. Apply changes by editing `.env` and rebuilding/restarting.
+
+## Security Defaults
+
+- Postgres and Elasticsearch are bound to `127.0.0.1` by default (`POSTGRES_BIND` / `ES_BIND`).
+- CORS defaults to a safe localhost-only policy unless you set `CORS_ALLOW_ORIGINS` / regex explicitly.
+- API container defaults to `nofile=65536` (`API_NOFILE_SOFT/HARD`).
+
+If you expose Elasticsearch to the network, it has no auth by default (`xpack.security.enabled=false`).
+
+## Health Checks
+
+- `GET /status`: component status + version + uptime + sanitized config.
+- `GET /status/summary`: a compact summary used by the dashboard and Docker health checks.
+
+## Common Commands
 
 ```bash
-# 查看日志
+# Logs
 docker compose logs -f api
 
-# 重新构建
+# Rebuild/restart
 docker compose up -d --build
 
-# 停止
+# Stop (keeps volumes)
 docker compose down
 ```
