@@ -60,6 +60,17 @@ flowchart LR
 - 打开控制台，按提示创建管理员账号（一次性）。
 - 管理员登录后创建 API key，分发给团队或服务使用。
 
+管理员密码重置（不改数据库结构）：
+- 在 `.env` 中设置 `ADMIN_RESET_TOKEN`（一串随机长字符串），重启 `api` 生效后执行：
+  ```bash
+  curl -fsS -X POST "$API_BASE/auth/admin/reset-password" \
+    -H "Content-Type: application/json" \
+    -H "X-Admin-Reset-Token: $ADMIN_RESET_TOKEN" \
+    -d '{"identifier":"admin","newPassword":"<new-strong-password>"}'
+  ```
+  其中 `identifier` 支持管理员的 `username` 或 `email`。
+- 重置后使用 `/auth/login` 重新登录。
+
 ## 可见性模型
 
 此 Docker 版本只支持 `private` 与 `team`（无 `public`）：
@@ -147,4 +158,3 @@ docker compose up -d --build
 # 停止（保留 volumes）
 docker compose down
 ```
-

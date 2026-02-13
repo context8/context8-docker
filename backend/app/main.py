@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import secrets
 import time
 import uuid
 from datetime import datetime, timezone
@@ -76,10 +77,12 @@ from .auth import (
     UserResponse,
     AdminSetupRequest,
     LoginRequest,
+    AdminPasswordResetRequest,
     ensure_user,
     admin_exists,
     setup_admin,
     login,
+    reset_admin_password,
 )
 from fastapi import APIRouter
 
@@ -476,6 +479,28 @@ async def login_account(
   db: AsyncSession = Depends(get_session),
 ):
   return await login(payload, db)
+
+
+@auth_router.post("/admin/reset-password")
+async def admin_reset_password(
+  payload: AdminPasswordResetRequest,
+  x_admin_reset_token: str | None = Header(default=None, alias="X-Admin-Reset-Token"),
+  db: AsyncSession = Depends(get_session),
+):
+  configured_token = (os.environ.get("ADMIN_RESET_TOKEN") or "").strip()
+  if not configured_token:
+    raise HTTPException(
+      status_code=status.HTTP_404_NOT_FOUND,
+      detail="Admin reset endpoint is disabled on this deployment",
+    )
+
+  if not x_admin_reset_token:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing admin reset token")
+  if not secrets.compare_digest(x_admin_reset_token, configured_token):
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin reset token")
+
+  await reset_admin_password(payload, db)
+  return {"message": "Admin password reset successful"}
 
 
 app.include_router(apikey_router)
