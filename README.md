@@ -60,6 +60,18 @@ First-time setup:
 - Open the Dashboard and create the admin account (one-time).
 - Login as admin and mint API keys for your team/services.
 
+Admin password recovery (no DB schema changes):
+- Set `ADMIN_RESET_TOKEN` in `.env` (a long random string), then restart `api`.
+- Use the reset endpoint:
+  ```bash
+  curl -fsS -X POST "$API_BASE/auth/admin/reset-password" \
+    -H "Content-Type: application/json" \
+    -H "X-Admin-Reset-Token: $ADMIN_RESET_TOKEN" \
+    -d '{"identifier":"admin","newPassword":"<new-strong-password>"}'
+  ```
+  where `identifier` can be `username` or `email`.
+- Then log in again at `/auth/login`.
+
 ## Visibility Model
 
 This Docker edition supports `private` and `team` (no `public`):

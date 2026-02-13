@@ -118,6 +118,19 @@ curl -fsS -X POST "$API_BASE/auth/login" \
   -d '{"identifier":"admin","password":"<strong-password>"}'
 ```
 
+If the admin password is forgotten, reset it (no DB migration/schema changes):
+```bash
+# Configure once in .env (choose a long random string), then restart api.
+export ADMIN_RESET_TOKEN="<secret-reset-token>"
+docker compose up -d api
+
+curl -fsS -X POST "$API_BASE/auth/admin/reset-password" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Reset-Token: $ADMIN_RESET_TOKEN" \
+  -d '{"identifier":"admin","newPassword":"<new-strong-password>"}'
+```
+The `identifier` can be the admin's `username` or `email`.
+
 Create an API key (optionally set quotas):
 ```bash
 curl -fsS -X POST "$API_BASE/apikeys" \
