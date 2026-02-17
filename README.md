@@ -52,6 +52,22 @@ Services in `docker-compose.yml`:
    docker compose up -d --build
    ```
 
+Agent-ready setup (interactive):
+```bash
+./scripts/configure_context8_docker.sh --up --smoke
+```
+
+Agent-ready setup (non-interactive):
+```bash
+./scripts/configure_context8_docker.sh \
+  --non-interactive \
+  --api-base "http://localhost:8000" \
+  --enable-semantic false \
+  --enable-federation false \
+  --up \
+  --smoke
+```
+
 Open:
 - Dashboard: `http://<host>:3000`
 - API docs: `http://<host>:8000/docs`
@@ -59,6 +75,19 @@ Open:
 First-time setup:
 - Open the Dashboard and create the admin account (one-time).
 - Login as admin and mint API keys for your team/services.
+
+## Agent Deployment Entry
+
+Public skill entry for Vibe Coding agents / OpenClaw:
+- [SKILL.md](SKILL.md)
+
+Raw URL (for `curl`/automation):
+- `https://raw.githubusercontent.com/context8/context8-docker/main/SKILL.md`
+
+Terminal configurator interface:
+```bash
+./scripts/configure_context8_docker.sh --help
+```
 
 Admin password recovery (no DB schema changes):
 - Set `ADMIN_RESET_TOKEN` in `.env` (a long random string), then restart `api`.

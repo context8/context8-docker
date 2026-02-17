@@ -1,137 +1,91 @@
 ---
 name: context8-docker-deploy
-description: End-to-end deployment workflow for Context8 Docker (context8/context8-docker) using Docker Compose. Use when asked to self-host Context8, deploy the Context8 Docker stack, configure `.env` secrets and ports, enable optional semantic search (embedding + ES kNN), configure optional federated search to a remote Context8 server, or run smoke checks for API and MCP compatibility.
+description: End-to-end deployment workflow for Context8 Docker (context8/context8-docker) using Docker Compose. Includes a terminal configurator for interactive and non-interactive setup, optional semantic search, optional federated search, and smoke checks for API/MCP compatibility.
 ---
 
 # Context8 Docker Deploy
 
-## Overview
+## Canonical Entry
 
-Deploy a complete Context8 instance (Dashboard + API + Elasticsearch + Postgres) with a small, predictable architecture.
-Clone/pull the GitHub repo, generate a safe `.env`, start the compose stack, and verify health + core endpoints.
+Use the repository root `SKILL.md` as the external/public entrypoint:
+- `./SKILL.md`
 
-## Workflow
+This skill stays in sync with the root skill and provides local helper scripts for repeated operations.
 
-Follow these steps in order. Prefer fixing the root cause (config/env) over adding runtime hacks.
+Repository:
+- `https://github.com/context8/context8-docker`
 
-### 0) Preflight
+## Quick Workflow
 
-- Ensure prerequisites:
-  - Docker is installed and the daemon is running
-  - `docker compose` is available
-  - `git` is available
-- Pick a working directory (example):
-  - Linux: `/opt/context8-docker`
-  - macOS: any writable folder
-
-Quick checks:
-```bash
-docker version
-docker compose version
-git --version
-```
-
-### 1) Clone Or Update The Repo
-
-Clone (new machine):
+1. Clone or update repo:
 ```bash
 git clone https://github.com/context8/context8-docker.git
 cd context8-docker
 ```
 
-Update (already cloned):
+2. Configure `.env` with terminal configurator:
 ```bash
-cd context8-docker
-git fetch --all --prune
-git pull --ff-only
+./scripts/configure_context8_docker.sh
 ```
 
-### 2) Create And Harden `.env`
+3. Configure + start + smoke in one command:
+```bash
+./scripts/configure_context8_docker.sh --up --smoke
+```
 
-Create `.env` once:
+4. Non-interactive automation:
+```bash
+./scripts/configure_context8_docker.sh \
+  --non-interactive \
+  --api-base "http://localhost:8000" \
+  --enable-semantic false \
+  --enable-federation false \
+  --up \
+  --smoke
+```
+
+Show all options:
+```bash
+./scripts/configure_context8_docker.sh --help
+```
+
+## Manual Fallback (No Configurator)
+
+If you need full manual control:
 ```bash
 cp .env.example .env
-```
-
-Set required variables (do not use placeholders):
-- `POSTGRES_PASSWORD`
-- `JWT_SECRET`
-- `API_KEY_SECRET`
-- `VITE_API_BASE` (browser-reachable API base, e.g. `http://localhost:8000`)
-
-Generate strong secrets:
-```bash
-openssl rand -hex 32
-```
-
-Important constraints:
-- `VITE_API_BASE` is a frontend build-time value; changing it requires rebuild (`docker compose up -d --build`).
-- Changing `POSTGRES_PASSWORD` after the Postgres volume exists requires updating the DB role password or recreating the volume. Prefer setting it correctly before first boot.
-
-Optional: avoid exposing DB/ES to the network (safe defaults):
-- `POSTGRES_BIND=127.0.0.1`
-- `ES_BIND=127.0.0.1`
-
-### 3) Start The Stack (Baseline)
-
-Start (BM25 only; no embedding container):
-```bash
 docker compose up -d --build
 ```
 
-Open:
-- Dashboard: `http://<host>:3000`
-- API docs: `http://<host>:8000/docs`
-
-### 4) Wait For Readiness
-
-Wait for the API healthcheck:
+Then run checks:
 ```bash
 API_BASE="${API_BASE:-http://localhost:8000}"
 curl -fsS "$API_BASE/status/summary"
+curl -fsS "$API_BASE/status"
 ```
 
-If it fails:
-```bash
-docker compose logs --tail=200 api
-docker compose ps
-```
+## Admin Bootstrap
 
-### 5) First-Time Admin Setup And API Key
-
-Check admin status:
+Check setup state:
 ```bash
 curl -fsS "$API_BASE/auth/status"
 ```
 
-If no admin exists, create one (one-time):
+Create admin (one-time):
 ```bash
 curl -fsS -X POST "$API_BASE/auth/setup" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"<strong-password>"}'
 ```
 
-Login and get a JWT:
+Login:
 ```bash
 curl -fsS -X POST "$API_BASE/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"identifier":"admin","password":"<strong-password>"}'
 ```
 
-If the admin password is forgotten, reset it (no DB migration/schema changes):
-```bash
-# Configure once in .env (choose a long random string), then restart api.
-export ADMIN_RESET_TOKEN="<secret-reset-token>"
-docker compose up -d api
-
-curl -fsS -X POST "$API_BASE/auth/admin/reset-password" \
-  -H "Content-Type: application/json" \
-  -H "X-Admin-Reset-Token: $ADMIN_RESET_TOKEN" \
-  -d '{"identifier":"admin","newPassword":"<new-strong-password>"}'
-```
-The `identifier` can be the admin's `username` or `email`.
-
-Create an API key (optionally set quotas):
+Create API key:
 ```bash
 curl -fsS -X POST "$API_BASE/apikeys" \
   -H "Authorization: Bearer <jwt>" \
@@ -139,88 +93,26 @@ curl -fsS -X POST "$API_BASE/apikeys" \
   -d '{"name":"default","dailyLimit":1000,"monthlyLimit":20000}'
 ```
 
-### 6) Smoke Checks (API + MCP Contract)
+## Optional Features
 
-With `X-API-Key`, verify:
-- `POST /search` works (ES-only search source)
-- `GET /mcp/solutions` returns an array (MCP compatibility)
-- `GET /solutions` returns an array for API-key auth (compat route)
-- `GET /v2/solutions` returns pagination (new contract)
+- Semantic search:
+  - Set `ES_KNN_WEIGHT > 0`
+  - Start compose with `--profile semantic`
+- Federated search:
+  - Set `REMOTE_CONTEXT8_BASE` + `REMOTE_CONTEXT8_API_KEY`
+  - Keep `REMOTE_CONTEXT8_ALLOW_OVERRIDE=false` unless required
+
+## Local helper scripts
+
+- `scripts/bootstrap_env.sh`
+  - Creates/updates `.env` with generated secrets (no secret values printed).
+- `scripts/smoke.sh`
+  - Runs health + auth-required endpoint checks using `API_BASE` and `API_KEY`.
 
 Example:
 ```bash
-API_KEY="<apiKey-from-admin>"
-
-curl -fsS -X POST "$API_BASE/search" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{"query":"test","limit":5,"offset":0,"source":"local"}'
-
-curl -fsS "$API_BASE/mcp/solutions?limit=1&offset=0" -H "X-API-Key: $API_KEY"
-curl -fsS "$API_BASE/solutions?limit=1&offset=0" -H "X-API-Key: $API_KEY"
-```
-
-### 7) Optional: Enable Semantic Search (Embedding + ES kNN)
-
-Enable kNN in `.env`:
-- `ES_KNN_WEIGHT=1`
-- optional: tune `ES_BM25_WEIGHT`
-
-Start the `semantic` profile (adds `embedding` container):
-```bash
-docker compose --profile semantic up -d --build
-```
-
-Re-check:
-```bash
-curl -fsS "$API_BASE/status"
-```
-
-### 8) Optional: Federated Search (Remote Context8)
-
-Set in `.env`:
-- `REMOTE_CONTEXT8_BASE=https://remote.example.com`
-- `REMOTE_CONTEXT8_API_KEY=...`
-- keep `REMOTE_CONTEXT8_ALLOW_OVERRIDE=false` unless you understand the security implications
-
-Test:
-```bash
-curl -fsS -X POST "$API_BASE/search" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{"query":"test","limit":5,"offset":0,"source":"remote"}'
-```
-
-### 9) Stop / Restart / Upgrade
-
-Stop (keeps volumes/data):
-```bash
-docker compose down
-```
-
-Upgrade:
-```bash
-git pull --ff-only
-docker compose up -d --build
-```
-
-## Resources (optional)
-
-### scripts/
-Use these scripts to reduce mistakes in repetitive steps:
-- `scripts/bootstrap_env.sh`: create/update `.env` with generated secrets (does not print secret values).
-- `scripts/smoke.sh`: run basic health + auth-required endpoint checks using `API_BASE` and `API_KEY`.
-
-Example usage (default Codex home is `~/.codex`):
-```bash
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-
 "$CODEX_HOME/skills/context8-docker-deploy/scripts/bootstrap_env.sh" ./context8-docker
 API_BASE="http://localhost:8000" API_KEY="<apiKey>" \
   "$CODEX_HOME/skills/context8-docker-deploy/scripts/smoke.sh"
 ```
-
-### references/
-Keep empty unless you need to store deployment-specific notes that are too long for SKILL.md.
-
-If you add references, keep them one hop away from SKILL.md (no deep reference chains).
