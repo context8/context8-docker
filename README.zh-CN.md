@@ -52,6 +52,22 @@ flowchart LR
    docker compose up -d --build
    ```
 
+面向 Agent 的一键配置（交互式）：
+```bash
+./scripts/configure_context8_docker.sh --up --smoke
+```
+
+面向 Agent 的一键配置（非交互）：
+```bash
+./scripts/configure_context8_docker.sh \
+  --non-interactive \
+  --api-base "http://localhost:8000" \
+  --enable-semantic false \
+  --enable-federation false \
+  --up \
+  --smoke
+```
+
 访问：
 - 控制台：`http://<host>:3000`
 - 后端文档：`http://<host>:8000/docs`
@@ -59,6 +75,19 @@ flowchart LR
 首次初始化：
 - 打开控制台，按提示创建管理员账号（一次性）。
 - 管理员登录后创建 API key，分发给团队或服务使用。
+
+## Agent 部署入口
+
+给 Vibe Coding Agent / OpenClaw 的公开技能入口：
+- [SKILL.md](SKILL.md)
+
+可直接 `curl` 的 raw 地址：
+- `https://raw.githubusercontent.com/context8/context8-docker/main/SKILL.md`
+
+终端配置器参数说明：
+```bash
+./scripts/configure_context8_docker.sh --help
+```
 
 管理员密码重置（不改数据库结构）：
 - 在 `.env` 中设置 `ADMIN_RESET_TOKEN`（一串随机长字符串），重启 `api` 生效后执行：
