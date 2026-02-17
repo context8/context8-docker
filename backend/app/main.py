@@ -128,6 +128,8 @@ SEARCH_EMBED_TIMEOUT = float(os.environ.get("SEARCH_EMBED_TIMEOUT", "4"))
 STATUS_TIMEOUT = float(os.environ.get("STATUS_TIMEOUT", "2.5"))
 STATUS_REMOTE_TIMEOUT = float(os.environ.get("STATUS_REMOTE_TIMEOUT", "3"))
 STATUS_EMBED_TIMEOUT = float(os.environ.get("STATUS_EMBED_TIMEOUT", "2.5"))
+ES_STARTUP_RETRIES = int(os.environ.get("ES_STARTUP_RETRIES", "10"))
+ES_STARTUP_RETRY_DELAY = float(os.environ.get("ES_STARTUP_RETRY_DELAY", "2"))
 
 def _sanitize_url(value: str | None) -> str | None:
   if not value:
@@ -253,8 +255,8 @@ async def _search_es(
   vector: list[float] | None,
   visibility: str | None,
 ):
-  try:
-    resp = await asyncio.wait_for(
+  async def _run_search_once():
+    return await asyncio.wait_for(
       search_solutions_es(
         query,
         api_key_ids,
@@ -267,12 +269,31 @@ async def _search_es(
       ),
       timeout=SEARCH_ES_TIMEOUT,
     )
-  except asyncio.TimeoutError as exc:
-    raise HTTPException(
-      status_code=503, detail=f"Elasticsearch timed out after {SEARCH_ES_TIMEOUT}s"
-    ) from exc
-  except Exception as exc:
-    raise HTTPException(status_code=502, detail=f"Elasticsearch search failed: {exc}") from exc
+
+  for attempt in (1, 2):
+    try:
+      resp = await _run_search_once()
+      break
+    except asyncio.TimeoutError as exc:
+      raise HTTPException(
+        status_code=503, detail=f"Elasticsearch timed out after {SEARCH_ES_TIMEOUT}s"
+      ) from exc
+    except Exception as exc:
+      is_missing_index = (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response is not None
+        and exc.response.status_code == 404
+      )
+      if is_missing_index and attempt == 1:
+        try:
+          await ensure_es_index()
+          continue
+        except Exception as ensure_exc:
+          raise HTTPException(
+            status_code=502,
+            detail=f"Elasticsearch search failed and index ensure failed: {ensure_exc}",
+          ) from ensure_exc
+      raise HTTPException(status_code=502, detail=f"Elasticsearch search failed: {exc}") from exc
 
   if not resp:
     raise HTTPException(status_code=503, detail="Elasticsearch is not configured (ES_URL missing)")
@@ -693,10 +714,15 @@ async def get_status_summary(db: AsyncSession = Depends(get_session)):
 
 @app.on_event("startup")
 async def on_startup():
-  try:
-    await ensure_es_index()
-  except Exception as exc:
-    print(f"[es] ensure index failed: {exc}")
+  for attempt in range(1, ES_STARTUP_RETRIES + 1):
+    try:
+      await ensure_es_index()
+      return
+    except Exception as exc:
+      if attempt == ES_STARTUP_RETRIES:
+        print(f"[es] ensure index failed after {attempt} attempts: {exc}")
+        return
+      await asyncio.sleep(ES_STARTUP_RETRY_DELAY)
 
 
 @app.post("/solutions", response_model=SolutionOut)
