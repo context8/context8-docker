@@ -176,6 +176,20 @@ wait_for_status_summary() {
   done
 }
 
+wait_for_local_search() {
+  local base_url="$1" api_key="$2" timeout_sec="${3:-60}" elapsed=0
+  while ! curl -fsS -X POST "$base_url/search" \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: $api_key" \
+    -d '{"query":"test","limit":1,"offset":0,"source":"local"}' >/dev/null 2>&1; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    if (( elapsed >= timeout_sec )); then
+      return 1
+    fi
+  done
+}
+
 run_smoke_checks() {
   local base_url="$1"
   local smoke_api_key="${API_KEY:-}"
@@ -190,10 +204,9 @@ run_smoke_checks() {
   fi
 
   if [[ -n "$smoke_api_key" ]]; then
-    curl -fsS -X POST "$base_url/search" \
-      -H "Content-Type: application/json" \
-      -H "X-API-Key: $smoke_api_key" \
-      -d '{"query":"test","limit":1,"offset":0,"source":"local"}' >/dev/null
+    if ! wait_for_local_search "$base_url" "$smoke_api_key" 60; then
+      die "Smoke failed: /search did not become ready within 60s"
+    fi
     curl -fsS "$base_url/mcp/solutions?limit=1&offset=0" -H "X-API-Key: $smoke_api_key" >/dev/null
     curl -fsS "$base_url/solutions?limit=1&offset=0" -H "X-API-Key: $smoke_api_key" >/dev/null
     curl -fsS "$base_url/v2/solutions?limit=1&offset=0" -H "X-API-Key: $smoke_api_key" >/dev/null
