@@ -93,6 +93,33 @@ curl -fsS -X POST "$API_BASE/apikeys" \
   -d '{"name":"default","dailyLimit":1000,"monthlyLimit":20000}'
 ```
 
+## Connect MCP via npm `context8-mcp`
+
+Use npm package `context8-mcp` to connect coding agents to this Docker deployment.
+
+Install:
+```bash
+npm install -g context8-mcp
+```
+
+Configure remote target (replace API port if needed):
+```bash
+context8-mcp remote-config \
+  --remote-url "http://localhost:8000" \
+  --api-key "<api-key>"
+```
+
+Validate:
+```bash
+context8-mcp diagnose
+context8-mcp list --limit 1
+```
+
+For MCP clients that execute package directly:
+```bash
+npx -y context8-mcp
+```
+
 ## Optional Features
 
 - Semantic search:

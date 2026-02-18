@@ -89,6 +89,33 @@ curl -fsS -X POST "$API_BASE/apikeys" \
   -d '{"name":"default","dailyLimit":1000,"monthlyLimit":20000}'
 ```
 
+## Connect MCP via npm `context8-mcp`
+
+After Docker is up and you have an API key, connect MCP using npm package `context8-mcp`.
+
+1. Install:
+```bash
+npm install -g context8-mcp
+```
+
+2. Point MCP to your local Docker API (replace port if not `8000`):
+```bash
+context8-mcp remote-config \
+  --remote-url "http://localhost:8000" \
+  --api-key "<api-key>"
+```
+
+3. Verify connection:
+```bash
+context8-mcp diagnose
+context8-mcp list --limit 1
+```
+
+4. Agent runtime command (no global install required):
+```bash
+npx -y context8-mcp
+```
+
 ## Smoke Endpoints
 
 Base checks:
