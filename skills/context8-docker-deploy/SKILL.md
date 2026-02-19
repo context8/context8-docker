@@ -15,6 +15,15 @@ This skill stays in sync with the root skill and provides local helper scripts f
 Repository:
 - `https://github.com/context8/context8-docker`
 
+## Critical MCP Architecture Note
+
+`context8-docker` is **not** a native MCP server endpoint.
+
+Use `context8-mcp` as bridge:
+- `Codex MCP client -> context8-mcp (stdio) -> Context8 Docker HTTP API`
+
+The Docker service provides MCP-compatible HTTP routes (`/mcp/solutions`), but Codex still needs `context8-mcp` for MCP tool access.
+
 ## Quick Workflow
 
 1. Clone or update repo:
@@ -33,6 +42,9 @@ cd context8-docker
 ./scripts/configure_context8_docker.sh --up --smoke
 ```
 
+When `--up` is used, the configurator auto-installs `context8-mcp` if `npm` is available.
+If `API_KEY` is set, it also runs `context8-mcp remote-config` to local Docker API (`http://localhost:${API_PORT:-8000}`).
+
 4. Non-interactive automation:
 ```bash
 ./scripts/configure_context8_docker.sh \
@@ -42,6 +54,16 @@ cd context8-docker
   --enable-federation false \
   --up \
   --smoke
+```
+
+Strict install mode (fail if `npm` missing):
+```bash
+./scripts/configure_context8_docker.sh --non-interactive --up --install-mcp
+```
+
+Skip MCP auto-install:
+```bash
+./scripts/configure_context8_docker.sh --non-interactive --up --skip-install-mcp
 ```
 
 Show all options:
@@ -71,14 +93,22 @@ Check setup state:
 curl -fsS "$API_BASE/auth/status"
 ```
 
-Create admin (one-time):
+If `adminExists=false`, create admin:
 ```bash
 curl -fsS -X POST "$API_BASE/auth/setup" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"<strong-password>"}'
 ```
 
-Login:
+If `adminExists=true`, use reset flow, then login:
+```bash
+curl -fsS -X POST "$API_BASE/auth/admin/reset-password" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Reset-Token: <admin-reset-token>" \
+  -d '{"identifier":"admin","newPassword":"<new-strong-password>"}'
+```
+
+Login (`token` field):
 ```bash
 curl -fsS -X POST "$API_BASE/auth/login" \
   -H "Content-Type: application/json" \
@@ -96,6 +126,7 @@ curl -fsS -X POST "$API_BASE/apikeys" \
 ## Connect MCP via npm `context8-mcp`
 
 Use npm package `context8-mcp` to connect coding agents to this Docker deployment.
+The configurator auto-install covers most cases; manual flow stays available:
 
 Install:
 ```bash
@@ -119,6 +150,53 @@ For MCP clients that execute package directly:
 ```bash
 npx -y context8-mcp
 ```
+
+## Layered Validation (Required)
+
+### Layer 1: Service smoke (HTTP)
+
+Use:
+- `GET /status/summary`
+- `GET /status`
+- `POST /search` (with `X-API-Key`)
+- `GET /mcp/solutions` (with `X-API-Key`)
+
+### Layer 2: Bridge smoke (Codex MCP)
+
+Use:
+```bash
+codex mcp add context8 --env CONTEXT8_REMOTE_API_KEY=<api-key> -- npx -y context8-mcp
+codex mcp list
+codex mcp get context8
+context8-mcp diagnose
+context8-mcp list --limit 1
+```
+
+Passing layer 1 does not guarantee layer 2. Validate both.
+
+## Known Behavior / Troubleshooting
+
+1. `context8-mcp diagnose` is reachable but `context8-mcp list` fails:
+   - `diagnose` pass does not guarantee every command path is healthy.
+   - Verify with fixed order:
+```bash
+API_BASE="http://localhost:8000"
+API_KEY="<api-key>"
+curl -fsS "$API_BASE/status/summary"
+curl -fsS "$API_BASE/status"
+curl -fsS "$API_BASE/mcp/solutions?limit=1&offset=0" -H "X-API-Key: $API_KEY"
+context8-mcp remote-config --remote-url "$API_BASE" --api-key "$API_KEY"
+context8-mcp diagnose
+context8-mcp list --limit 1
+```
+
+2. Codex MCP server appears ready but tool/resource listing fails:
+   - Check `codex mcp list` and `codex mcp get context8`.
+   - Confirm bridge model: Codex talks to `context8-mcp`, which talks to Docker HTTP API routes.
+
+3. Health endpoint confusion:
+   - Standard health endpoints are `GET /status/summary` and `GET /status`.
+   - `/summary` is not a standard health path for this deployment.
 
 ## Optional Features
 

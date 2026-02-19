@@ -39,11 +39,13 @@ Federation config:
 Runtime:
   --up                              Run docker compose up -d --build
   --smoke                           Run health + API/MCP smoke checks
+  --install-mcp                     Require npm and install context8-mcp after --up
+  --skip-install-mcp                Skip auto-install context8-mcp during --up
   --profile <name>                  Compose profile (e.g. semantic)
   --help                            Show this help
 
 Environment:
-  API_KEY                           Optional API key used by --smoke for auth-required endpoint checks
+  API_KEY                           Optional API key used by --smoke and context8-mcp remote-config
 EOF
 }
 
@@ -190,6 +192,51 @@ wait_for_local_search() {
   done
 }
 
+install_context8_mcp() {
+  local mcp_remote_url="$1"
+  local install_mode="$2"
+  local remote_api_key="${API_KEY:-}"
+
+  if [[ "$install_mode" == "false" ]]; then
+    log "Skipped context8-mcp installation (--skip-install-mcp)"
+    return 0
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    if [[ "$install_mode" == "true" ]]; then
+      die "npm is required for --install-mcp but was not found"
+    fi
+    warn "npm was not found; skipped context8-mcp auto-install"
+    return 0
+  fi
+
+  log "Installing context8-mcp via npm"
+  if ! npm install -g context8-mcp --silent >/dev/null 2>&1; then
+    if [[ "$install_mode" == "true" ]]; then
+      die "Failed to install context8-mcp with npm"
+    fi
+    warn "context8-mcp auto-install failed; run manually: npm install -g context8-mcp"
+    return 0
+  fi
+
+  if ! command -v context8-mcp >/dev/null 2>&1; then
+    warn "context8-mcp installed but not found on PATH; check npm global bin"
+    return 0
+  fi
+
+  log "context8-mcp installed"
+  if [[ -n "$remote_api_key" ]]; then
+    log "Applying context8-mcp remote-config to local Docker API: $mcp_remote_url"
+    if context8-mcp remote-config --remote-url "$mcp_remote_url" --api-key "$remote_api_key" >/dev/null 2>&1; then
+      log "context8-mcp remote-config applied"
+    else
+      warn "context8-mcp remote-config failed; run manually after startup"
+    fi
+  else
+    warn "API_KEY is empty; skipped context8-mcp remote-config"
+  fi
+}
+
 run_smoke_checks() {
   local base_url="$1"
   local smoke_api_key="${API_KEY:-}"
@@ -232,6 +279,7 @@ force="false"
 run_up="false"
 run_smoke="false"
 profile=""
+install_mcp="auto"
 
 api_base=""
 postgres_password=""
@@ -272,6 +320,8 @@ while [[ $# -gt 0 ]]; do
     --remote-timeout) remote_timeout="${2:-}"; shift 2 ;;
     --up) run_up="true"; shift ;;
     --smoke) run_smoke="true"; shift ;;
+    --install-mcp) install_mcp="true"; shift ;;
+    --skip-install-mcp) install_mcp="false"; shift ;;
     --profile) profile="${2:-}"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown option: $1 (run --help for usage)" ;;
@@ -302,6 +352,7 @@ current_remote_allowed_hosts="$(get_kv REMOTE_CONTEXT8_ALLOWED_HOSTS)"
 current_remote_timeout="$(get_kv REMOTE_CONTEXT8_TIMEOUT)"
 current_postgres_bind="$(get_kv POSTGRES_BIND)"
 current_es_bind="$(get_kv ES_BIND)"
+current_api_port="$(get_kv API_PORT)"
 
 if [[ "$non_interactive" == "true" ]]; then
   if [[ -z "$api_base" ]]; then
@@ -479,6 +530,12 @@ set_kv REMOTE_CONTEXT8_ALLOWED_HOSTS "$remote_allowed_hosts"
 set_kv REMOTE_CONTEXT8_TIMEOUT "$remote_timeout"
 
 enable_federation_final="$enable_federation"
+mcp_remote_port="${current_api_port:-8000}"
+if [[ ! "$mcp_remote_port" =~ ^[0-9]+$ ]]; then
+  warn "Invalid API_PORT '$mcp_remote_port'; fallback to 8000 for context8-mcp remote-config"
+  mcp_remote_port="8000"
+fi
+mcp_remote_url="http://localhost:${mcp_remote_port}"
 
 if [[ "$run_up" == "true" || "$run_smoke" == "true" ]]; then
   require_command curl
@@ -505,6 +562,7 @@ if [[ "$run_up" == "true" ]]; then
   popd >/dev/null
 
   wait_for_status_summary "$api_base" 180
+  install_context8_mcp "$mcp_remote_url" "$install_mcp"
 fi
 
 if [[ "$run_smoke" == "true" ]]; then
@@ -517,6 +575,7 @@ log "Effective config summary (sanitized)"
 printf '  repo_dir=%s\n' "$repo_dir"
 printf '  env_file=%s\n' "$env_file"
 printf '  VITE_API_BASE=%s\n' "$api_base"
+printf '  MCP_REMOTE_URL=%s\n' "$mcp_remote_url"
 printf '  POSTGRES_PASSWORD=%s\n' "$(masked_state "$postgres_password_final")"
 printf '  JWT_SECRET=%s\n' "$(masked_state "$jwt_secret_final")"
 printf '  API_KEY_SECRET=%s\n' "$(masked_state "$api_key_secret_final")"
@@ -530,6 +589,7 @@ printf '  REMOTE_CONTEXT8_API_KEY=%s\n' "$(masked_state "$remote_api_key")"
 printf '  REMOTE_CONTEXT8_ALLOW_OVERRIDE=%s\n' "$remote_allow_override"
 printf '  REMOTE_CONTEXT8_ALLOWED_HOSTS=%s\n' "${remote_allowed_hosts:-<empty>}"
 printf '  REMOTE_CONTEXT8_TIMEOUT=%s\n' "$remote_timeout"
+printf '  install_context8_mcp=%s\n' "$install_mcp"
 
 printf '\n'
 log "Next commands"

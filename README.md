@@ -57,6 +57,10 @@ Agent-ready setup (interactive):
 ./scripts/configure_context8_docker.sh --up --smoke
 ```
 
+When `--up` is used, the configurator auto-installs `context8-mcp` if `npm` exists.
+If `API_KEY` is exported, it also auto-runs `context8-mcp remote-config` to local Docker API `http://localhost:${API_PORT:-8000}`.
+Use `--install-mcp` to make it strict (fail when `npm` is missing), or `--skip-install-mcp` to disable it.
+
 Agent-ready setup (non-interactive):
 ```bash
 ./scripts/configure_context8_docker.sh \

@@ -57,6 +57,10 @@ flowchart LR
 ./scripts/configure_context8_docker.sh --up --smoke
 ```
 
+当使用 `--up` 时，配置器会在检测到 `npm` 后自动安装 `context8-mcp`。
+若已导出 `API_KEY`，还会自动执行 `context8-mcp remote-config` 指向本机 Docker API：`http://localhost:${API_PORT:-8000}`。
+可用 `--install-mcp` 设为严格模式（缺少 `npm` 直接失败），或用 `--skip-install-mcp` 跳过自动安装。
+
 面向 Agent 的一键配置（非交互）：
 ```bash
 ./scripts/configure_context8_docker.sh \

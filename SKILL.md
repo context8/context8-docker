@@ -11,6 +11,15 @@ Platform:
 - Docker daemon + `docker compose`
 - `git`, `curl`
 
+## Critical MCP Architecture Note
+
+`context8-docker` is **not** a native MCP server endpoint.
+
+Use `context8-mcp` as the bridge:
+- `Codex MCP client -> context8-mcp (stdio) -> Context8 Docker HTTP API`
+
+This deployment exposes MCP-compatible HTTP routes like `/mcp/solutions`, but not a standalone MCP transport endpoint for Codex direct connection.
+
 ## Minimal Agent Flow
 
 1. Clone or update:
@@ -29,6 +38,9 @@ cd context8-docker
 ./scripts/configure_context8_docker.sh --up --smoke
 ```
 
+By default, when `--up` is used, the script auto-installs `context8-mcp` if `npm` is available.
+If `API_KEY` is provided in environment, it auto-applies `context8-mcp remote-config` to local Docker API (`http://localhost:${API_PORT:-8000}`).
+
 ## Non-Interactive Automation (for Agents)
 
 Use non-interactive flags for deterministic setup:
@@ -40,6 +52,16 @@ Use non-interactive flags for deterministic setup:
   --enable-federation false \
   --up \
   --smoke
+```
+
+To make MCP installation strict (fail if `npm` is missing), add:
+```bash
+--install-mcp
+```
+
+To skip MCP auto-install:
+```bash
+--skip-install-mcp
 ```
 
 If semantic search is enabled, add the compose profile:
@@ -67,14 +89,22 @@ API_BASE="http://localhost:8000"
 curl -fsS "$API_BASE/auth/status"
 ```
 
-Create admin once (if needed):
+If `adminExists=false`, create admin:
 ```bash
 curl -fsS -X POST "$API_BASE/auth/setup" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"<strong-password>"}'
 ```
 
-Login and get JWT:
+If `adminExists=true`, do **not** rerun setup. Use reset flow, then login:
+```bash
+curl -fsS -X POST "$API_BASE/auth/admin/reset-password" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Reset-Token: <admin-reset-token>" \
+  -d '{"identifier":"admin","newPassword":"<new-strong-password>"}'
+```
+
+Login and get JWT (`token` field):
 ```bash
 curl -fsS -X POST "$API_BASE/auth/login" \
   -H "Content-Type: application/json" \
@@ -91,7 +121,8 @@ curl -fsS -X POST "$API_BASE/apikeys" \
 
 ## Connect MCP via npm `context8-mcp`
 
-After Docker is up and you have an API key, connect MCP using npm package `context8-mcp`.
+`configure_context8_docker.sh --up` will try to install `context8-mcp` automatically.
+If auto-install is skipped/failed, install manually:
 
 1. Install:
 ```bash
@@ -116,7 +147,11 @@ context8-mcp list --limit 1
 npx -y context8-mcp
 ```
 
-## Smoke Endpoints
+## Layered Validation (Required)
+
+Validate in two layers. Passing layer 1 does not guarantee layer 2.
+
+### Layer 1: Service smoke (HTTP)
 
 Base checks:
 - `GET /status/summary`
@@ -129,6 +164,46 @@ With API key:
 - `GET /v2/solutions`
 
 If federation is enabled, `source=remote` check is attempted as warning-only (does not fail local deployment status).
+
+### Layer 2: Bridge smoke (Codex MCP)
+
+Register and inspect bridge:
+```bash
+codex mcp add context8 --env CONTEXT8_REMOTE_API_KEY=<api-key> -- npx -y context8-mcp
+codex mcp list
+codex mcp get context8
+```
+
+Then execute one minimal bridge call:
+```bash
+context8-mcp diagnose
+context8-mcp list --limit 1
+```
+
+## Known Behavior / Troubleshooting
+
+1. `diagnose` says remote reachable, but `list` still fails:
+   - `diagnose` success does not guarantee all subcommands are using the same runtime path.
+   - Prefer fixed verification order:
+```bash
+API_BASE="http://localhost:8000"
+API_KEY="<api-key>"
+
+curl -fsS "$API_BASE/status/summary"
+curl -fsS "$API_BASE/status"
+curl -fsS "$API_BASE/mcp/solutions?limit=1&offset=0" -H "X-API-Key: $API_KEY"
+context8-mcp remote-config --remote-url "$API_BASE" --api-key "$API_KEY"
+context8-mcp diagnose
+context8-mcp list --limit 1
+```
+
+2. Codex MCP ready, but `list_mcp_resources` fails:
+   - Confirm bridge is configured (`codex mcp list` / `codex mcp get context8`).
+   - Remember the bridge target is HTTP API compatibility routes (`/mcp/solutions`), not a native MCP endpoint on Docker.
+
+3. Health path confusion:
+   - Use `GET /status/summary` and `GET /status`.
+   - `/summary` is not the standard health path for this deployment.
 
 ## Notes
 
