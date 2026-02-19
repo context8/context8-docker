@@ -71,12 +71,41 @@ Show all options:
 ./scripts/configure_context8_docker.sh --help
 ```
 
+## npm-like Update Flow
+
+Default update command:
+```bash
+./scripts/update_context8_docker.sh
+```
+
+Rollback to exact image version:
+```bash
+CONTEXT8_VERSION=v1.2.2 ./scripts/update_context8_docker.sh
+```
+
+Switch registry source:
+```bash
+CONTEXT8_REGISTRY=ghcr.io/context8 ./scripts/update_context8_docker.sh
+# or
+CONTEXT8_REGISTRY=docker.io/<org_or_user> ./scripts/update_context8_docker.sh
+```
+
+Optional one-shot Watchtower update:
+```bash
+./scripts/update_context8_docker_once_watchtower.sh
+```
+
+Image channel env keys:
+- `CONTEXT8_VERSION` (default `v1`)
+- `CONTEXT8_REGISTRY` (default `ghcr.io/context8`)
+- optional direct images: `CONTEXT8_API_IMAGE`, `CONTEXT8_FRONTEND_IMAGE`, `CONTEXT8_EMBEDDING_IMAGE`
+
 ## Manual Fallback (No Configurator)
 
 If you need full manual control:
 ```bash
 cp .env.example .env
-docker compose up -d --build
+docker compose up -d --pull always
 ```
 
 Then run checks:
@@ -213,6 +242,10 @@ context8-mcp list --limit 1
   - Creates/updates `.env` with generated secrets (no secret values printed).
 - `scripts/smoke.sh`
   - Runs health + auth-required endpoint checks using `API_BASE` and `API_KEY`.
+- `scripts/update_context8_docker.sh`
+  - Pulls latest images, recreates containers, waits for health, and prints digest summary.
+- `scripts/update_context8_docker_once_watchtower.sh`
+  - Runs Watchtower one-shot update (manual trigger; no scheduler).
 
 Example:
 ```bash

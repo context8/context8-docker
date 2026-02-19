@@ -25,11 +25,13 @@ flowchart LR
 ```
 
 `docker-compose.yml` 里的服务：
-- `frontend`：Vite 构建 + Nginx 静态站点（管理控制台）。
-- `api`：FastAPI + Alembic；负责鉴权、权限/配额、ES-only 检索与联邦聚合。
+- `frontend`：预构建的 Nginx 静态镜像（管理控制台）。
+- `api`：预构建的 FastAPI 镜像 + Alembic；负责鉴权、权限/配额、ES-only 检索与联邦聚合。
 - `postgres`：持久化业务数据（用户、API key/sub key、solutions、votes）。
 - `elasticsearch`：唯一检索后端。
-- `embedding`（`semantic` profile）：sentence-transformers 服务，用于 kNN 向量检索。
+- `embedding`（`semantic` profile）：预构建的 sentence-transformers 镜像，用于 kNN 向量检索。
+
+本地改代码开发时，使用 `docker-compose.dev.yml` 覆盖文件走源码构建。
 
 ## 快速启动
 
@@ -49,7 +51,7 @@ flowchart LR
    ```
 3. 启动：
    ```bash
-   docker compose up -d --build
+   docker compose up -d --pull always
    ```
 
 面向 Agent 的一键配置（交互式）：
@@ -93,6 +95,50 @@ flowchart LR
 ./scripts/configure_context8_docker.sh --help
 ```
 
+## 更新（像 npm update 一样）
+
+默认一条命令更新：
+```bash
+./scripts/update_context8_docker.sh
+```
+
+该命令固定执行：
+1. `docker compose pull`
+2. `docker compose up -d --force-recreate --remove-orphans`
+3. 健康检查（`GET /status/summary`）
+4. 输出容器与镜像 digest 摘要
+
+回滚到指定版本：
+```bash
+CONTEXT8_VERSION=v1.2.2 ./scripts/update_context8_docker.sh
+```
+
+切换镜像仓库通道：
+```bash
+CONTEXT8_REGISTRY=ghcr.io/context8 ./scripts/update_context8_docker.sh
+# 或
+CONTEXT8_REGISTRY=docker.io/<org_or_user> ./scripts/update_context8_docker.sh
+```
+
+可选一次性 Watchtower 更新（仅手动触发，不做定时）：
+```bash
+./scripts/update_context8_docker_once_watchtower.sh
+```
+
+安全提示：Watchtower 会挂载 `/var/run/docker.sock`，具备较高主机权限。
+
+`.env` 镜像通道配置：
+- `CONTEXT8_VERSION`（默认 `v1`，稳定大版本通道）
+- `CONTEXT8_REGISTRY`（默认 `ghcr.io/context8`）
+- 可选精确镜像覆盖：`CONTEXT8_API_IMAGE`、`CONTEXT8_FRONTEND_IMAGE`、`CONTEXT8_EMBEDDING_IMAGE`
+
+## 镜像发布（维护者）
+
+- 工作流：`.github/workflows/publish-images.yml`
+- 触发方式：推送语义化 tag（如 `v1.2.3`）
+- 发布目标：GHCR + Docker Hub（api/frontend/embedding）
+- 需要的 GitHub Secrets：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`
+
 管理员密码重置（不改数据库结构）：
 - 在 `.env` 中设置 `ADMIN_RESET_TOKEN`（一串随机长字符串），重启 `api` 生效后执行：
   ```bash
@@ -123,7 +169,7 @@ flowchart LR
    - 可选：调整 `ES_BM25_WEIGHT` 做混合
 2. 用 `semantic` profile 启动：
    ```bash
-   docker compose --profile semantic up -d --build
+   docker compose --profile semantic up -d --pull always
    ```
 
 说明：
@@ -185,8 +231,11 @@ REMOTE_CONTEXT8_ALLOWED_HOSTS=api.context8.org,localhost
 # 看日志
 docker compose logs -f api
 
-# rebuild/restart
-docker compose up -d --build
+# 拉取并更新容器
+./scripts/update_context8_docker.sh
+
+# 本地源码构建（仅开发模式）
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # 停止（保留 volumes）
 docker compose down

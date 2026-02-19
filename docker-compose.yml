@@ -46,8 +46,7 @@ services:
       - context8-net
 
   embedding:
-    build:
-      context: ./embedding
+    image: ${CONTEXT8_EMBEDDING_IMAGE:-${CONTEXT8_REGISTRY:-ghcr.io/context8}/context8-docker-embedding:${CONTEXT8_VERSION:-v1}}
     container_name: ${CONTEXT8_EMBEDDING_NAME:-context8-embedding}
     profiles: ["semantic"]
     environment:
@@ -59,8 +58,7 @@ services:
       - context8-net
 
   api:
-    build:
-      context: ./backend
+    image: ${CONTEXT8_API_IMAGE:-${CONTEXT8_REGISTRY:-ghcr.io/context8}/context8-docker-api:${CONTEXT8_VERSION:-v1}}
     container_name: ${CONTEXT8_API_NAME:-context8-api}
     depends_on:
       postgres:
@@ -105,10 +103,7 @@ services:
       retries: 3
 
   frontend:
-    build:
-      context: ./frontend
-      args:
-        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    image: ${CONTEXT8_FRONTEND_IMAGE:-${CONTEXT8_REGISTRY:-ghcr.io/context8}/context8-docker-frontend:${CONTEXT8_VERSION:-v1}}
     container_name: ${CONTEXT8_FRONTEND_NAME:-context8-frontend}
     depends_on:
       api:

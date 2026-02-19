@@ -37,7 +37,7 @@ Federation config:
   --remote-timeout <sec>            Sets REMOTE_CONTEXT8_TIMEOUT
 
 Runtime:
-  --up                              Run docker compose up -d --build
+  --up                              Run docker compose up -d --pull always
   --smoke                           Run health + API/MCP smoke checks
   --install-mcp                     Require npm and install context8-mcp after --up
   --skip-install-mcp                Skip auto-install context8-mcp during --up
@@ -543,7 +543,6 @@ fi
 
 if [[ "$run_up" == "true" ]]; then
   require_command docker
-  require_command git
   docker info >/dev/null 2>&1 || die "Docker daemon is not running. Check: docker info"
   docker compose version >/dev/null 2>&1 || die "docker compose is not available"
 
@@ -555,9 +554,9 @@ if [[ "$run_up" == "true" ]]; then
 
   pushd "$repo_dir" >/dev/null
   if [[ -n "$compose_profile" ]]; then
-    docker compose --profile "$compose_profile" up -d --build
+    docker compose --profile "$compose_profile" up -d --pull always
   else
-    docker compose up -d --build
+    docker compose up -d --pull always
   fi
   popd >/dev/null
 
@@ -595,9 +594,9 @@ printf '\n'
 log "Next commands"
 if [[ "$run_up" == "false" ]]; then
   if [[ "$enable_semantic" == "true" ]]; then
-    printf '  cd %s && docker compose --profile semantic up -d --build\n' "$repo_dir"
+    printf '  cd %s && docker compose --profile semantic up -d --pull always\n' "$repo_dir"
   else
-    printf '  cd %s && docker compose up -d --build\n' "$repo_dir"
+    printf '  cd %s && docker compose up -d --pull always\n' "$repo_dir"
   fi
 fi
 if [[ "$run_smoke" == "false" ]]; then

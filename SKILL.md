@@ -81,6 +81,35 @@ See all script options:
 ./scripts/configure_context8_docker.sh --help
 ```
 
+## npm-like Update Flow
+
+Default update command:
+```bash
+./scripts/update_context8_docker.sh
+```
+
+Rollback to an exact version:
+```bash
+CONTEXT8_VERSION=v1.2.2 ./scripts/update_context8_docker.sh
+```
+
+Switch registry channel:
+```bash
+CONTEXT8_REGISTRY=ghcr.io/context8 ./scripts/update_context8_docker.sh
+# or
+CONTEXT8_REGISTRY=docker.io/<org_or_user> ./scripts/update_context8_docker.sh
+```
+
+Optional one-shot Watchtower update (manual trigger only):
+```bash
+./scripts/update_context8_docker_once_watchtower.sh
+```
+
+Image channel variables:
+- `CONTEXT8_VERSION` (default `v1`)
+- `CONTEXT8_REGISTRY` (default `ghcr.io/context8`)
+- optional exact image overrides: `CONTEXT8_API_IMAGE`, `CONTEXT8_FRONTEND_IMAGE`, `CONTEXT8_EMBEDDING_IMAGE`
+
 ## Admin Bootstrap
 
 Check if admin exists:
@@ -210,4 +239,5 @@ context8-mcp list --limit 1
 - This deployment is ES-only search (`/search` does not fallback to DB).
 - Writes are synchronous DB + ES.
 - No Redis/RQ worker stack in the Docker lightweight edition.
-- Existing manual flow (`cp .env.example .env` + `docker compose up -d --build`) remains valid.
+- Existing manual flow (`cp .env.example .env` + `docker compose up -d --pull always`) remains valid.
+- Local source-build development path: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.

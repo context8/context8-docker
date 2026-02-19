@@ -25,11 +25,13 @@ flowchart LR
 ```
 
 Services in `docker-compose.yml`:
-- `frontend`: Vite build + Nginx static site (admin dashboard).
-- `api`: FastAPI + Alembic migrations; enforces auth, permissions, quotas, ES-only search, and federation.
+- `frontend`: prebuilt Nginx static image (admin dashboard).
+- `api`: prebuilt FastAPI image + Alembic migrations; enforces auth, permissions, quotas, ES-only search, and federation.
 - `postgres`: durable data store (users, API keys/subkeys, solutions, votes).
 - `elasticsearch`: the only search backend.
-- `embedding` (profile `semantic`): sentence-transformers service used for kNN.
+- `embedding` (profile `semantic`): prebuilt sentence-transformers image used for kNN.
+
+For local source builds during development, use `docker-compose.dev.yml` override.
 
 ## Quick Start
 
@@ -49,7 +51,7 @@ Services in `docker-compose.yml`:
    ```
 3. Start:
    ```bash
-   docker compose up -d --build
+   docker compose up -d --pull always
    ```
 
 Agent-ready setup (interactive):
@@ -93,6 +95,50 @@ Terminal configurator interface:
 ./scripts/configure_context8_docker.sh --help
 ```
 
+## Update (npm-like)
+
+Default one-command update:
+```bash
+./scripts/update_context8_docker.sh
+```
+
+This command runs:
+1. `docker compose pull`
+2. `docker compose up -d --force-recreate --remove-orphans`
+3. health check (`GET /status/summary`)
+4. image digest/container summary output
+
+Rollback to a fixed version:
+```bash
+CONTEXT8_VERSION=v1.2.2 ./scripts/update_context8_docker.sh
+```
+
+Switch registry channel:
+```bash
+CONTEXT8_REGISTRY=ghcr.io/context8 ./scripts/update_context8_docker.sh
+# or
+CONTEXT8_REGISTRY=docker.io/<org_or_user> ./scripts/update_context8_docker.sh
+```
+
+Optional one-shot Watchtower update (manual trigger only, not scheduled):
+```bash
+./scripts/update_context8_docker_once_watchtower.sh
+```
+
+Security note: Watchtower mounts `/var/run/docker.sock` and has high host control privilege.
+
+Image channel env keys in `.env`:
+- `CONTEXT8_VERSION` (default `v1`, stable major channel)
+- `CONTEXT8_REGISTRY` (default `ghcr.io/context8`)
+- optional exact image overrides: `CONTEXT8_API_IMAGE`, `CONTEXT8_FRONTEND_IMAGE`, `CONTEXT8_EMBEDDING_IMAGE`
+
+## Release Images (Maintainers)
+
+- Workflow: `.github/workflows/publish-images.yml`
+- Trigger: push semver tag like `v1.2.3`
+- Targets: GHCR + Docker Hub (api/frontend/embedding)
+- Required GitHub secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
+
 Admin password recovery (no DB schema changes):
 - Set `ADMIN_RESET_TOKEN` in `.env` (a long random string), then restart `api`.
 - Use the reset endpoint:
@@ -124,7 +170,7 @@ This Docker edition supports `private` and `team` (no `public`):
    - optional: tune `ES_BM25_WEIGHT`
 2. Start with the `semantic` profile:
    ```bash
-   docker compose --profile semantic up -d --build
+   docker compose --profile semantic up -d --pull always
    ```
 
 Notes:
@@ -186,8 +232,11 @@ If you expose Elasticsearch to the network, it has no auth by default (`xpack.se
 # Logs
 docker compose logs -f api
 
-# Rebuild/restart
-docker compose up -d --build
+# Pull/update containers
+./scripts/update_context8_docker.sh
+
+# Local source build (development only)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # Stop (keeps volumes)
 docker compose down
